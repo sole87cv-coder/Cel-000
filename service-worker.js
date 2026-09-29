@@ -1,4 +1,4 @@
-const CACHE_NAME = 'esf-01-v1';
+const CACHE_NAME = 'esf-01-v2';
 const APP_FILES = [
   './',
   './index.html',

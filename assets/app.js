@@ -35,6 +35,8 @@
     sizeLabel.textContent = size.title;
     sizeDimensions.textContent = size.width;
     demoStatus.textContent = `Visualização: ${size.title.toLocaleLowerCase('pt-BR')}`;
+    // informar o shader de preview sobre o novo tamanho
+    try { window.ESFShaders && window.ESFShaders.setSize(index); } catch (e) { /* ignore */ }
   }
 
   safe(() => {
@@ -42,6 +44,11 @@
       previewIndex = (previewIndex + 1) % sizes.length;
       applyPreview(previewIndex);
     });
+  });
+
+  // inicializar shaders quando a página carregar (se disponível)
+  window.addEventListener('load', () => {
+    try { window.ESFShaders && window.ESFShaders.initHero(); window.ESFShaders && window.ESFShaders.initPreview(); window.ESFShaders && window.ESFShaders.setSize(previewIndex); } catch (e) { /* ignore */ }
   });
 
   // Swipe gestures para alternar visualização em dispositivos touch

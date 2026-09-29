@@ -1,4 +1,5 @@
 (() => {
+  // Gerencia captura de áudio e giroscópio e envia dados para shaders via window.ESFShaders
   const toggle = document.getElementById('interaction-toggle');
   const note = document.getElementById('interaction-note');
   const canvas = document.getElementById('interaction-canvas');
@@ -6,161 +7,30 @@
   const orientSlider = document.getElementById('orient-sens');
   const audioValueSpan = document.getElementById('audio-sens-value');
   const orientValueSpan = document.getElementById('orient-sens-value');
-  let gl = null;
-  let ctx = null; // fallback 2D
-  let running = false;
+
   let audioContext = null;
   let analyser = null;
-  let dataArray = null;
+  let dataFreq = null;
+  let dataTime = null;
   let source = null;
-  let orientation = { alpha: 0, beta: 0, gamma: 0 };
   let rafId = null;
-  let audioSensitivity = 1.5;
-  let orientSensitivity = 1.5;
+  let running = false;
+
+  let audioSensitivity = audioSlider ? parseFloat(audioSlider.value) || 1.0 : 1.0;
+  let orientSensitivity = orientSlider ? parseFloat(orientSlider.value) || 1.0 : 1.0;
+
+  audioValueSpan && (audioValueSpan.textContent = audioSensitivity.toFixed(2));
+  orientValueSpan && (orientValueSpan.textContent = orientSensitivity.toFixed(2));
+
+  audioSlider && audioSlider.addEventListener('input', () => { audioSensitivity = parseFloat(audioSlider.value) || 1.0; audioValueSpan && (audioValueSpan.textContent = audioSensitivity.toFixed(2)); });
+  orientSlider && orientSlider.addEventListener('input', () => { orientSensitivity = parseFloat(orientSlider.value) || 1.0; orientValueSpan && (orientValueSpan.textContent = orientSensitivity.toFixed(2)); });
+
+  let orientation = { alpha:0, beta:0, gamma:0 };
 
   function resizeCanvas() {
-    canvas.width = window.innerWidth;
+    if (!canvas) return;
+    canvas.width = canvas.clientWidth || window.innerWidth;
     canvas.height = Math.min(380, window.innerHeight * 0.45);
-  }
-
-  // attach slider handlers (if present)
-  if (audioSlider) {
-    audioSensitivity = parseFloat(audioSlider.value) || 1.0;
-    audioValueSpan && (audioValueSpan.textContent = audioSensitivity.toFixed(2));
-    audioSlider.addEventListener('input', () => {
-      audioSensitivity = parseFloat(audioSlider.value) || 1.0;
-      audioValueSpan && (audioValueSpan.textContent = audioSensitivity.toFixed(2));
-    });
-  }
-  if (orientSlider) {
-    orientSensitivity = parseFloat(orientSlider.value) || 1.0;
-    orientValueSpan && (orientValueSpan.textContent = orientSensitivity.toFixed(2));
-    orientSlider.addEventListener('input', () => {
-      orientSensitivity = parseFloat(orientSlider.value) || 1.0;
-      orientValueSpan && (orientValueSpan.textContent = orientSensitivity.toFixed(2));
-    });
-  }
-
-  function lerp(a, b, t) { return a + (b - a) * t; }
-
-  function getAudioLevel() {
-    if (!analyser) return 0;
-    analyser.getByteTimeDomainData(dataArray);
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      const v = (dataArray[i] - 128) / 128;
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / dataArray.length);
-    return Math.min(1, rms * 5 * audioSensitivity);
-  }
-
-  // --- WebGL shader renderer ---
-  let program = null;
-  let uResolution = null;
-  let uTime = null;
-  let uAudio = null;
-  let uOrient = null;
-
-  function createShader(gl, type, source) {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, source);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.warn('Shader compile error:', gl.getShaderInfoLog(s));
-      gl.deleteShader(s);
-      return null;
-    }
-    return s;
-  }
-
-  function initWebGL() {
-    gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-    if (!gl) return false;
-
-    const vsSource = `attribute vec2 a_position; void main(){ gl_Position = vec4(a_position,0.0,1.0); }`;
-    const fsSource = `precision mediump float; uniform vec2 u_resolution; uniform float u_time; uniform float u_audio; uniform vec2 u_orient;
-    // simple moving blobs with color mix
-    float sdCircle(vec2 p, vec2 c, float r){ return length(p-c)-r; }
-    void main(){
-      vec2 uv = gl_FragCoord.xy / u_resolution.xy;
-      vec2 p = (uv - 0.5) * vec2(u_resolution.x/u_resolution.y, 1.0);
-      float t = u_time * 0.001;
-      float audio = clamp(u_audio, 0.0, 1.0);
-      float ox = u_orient.x * 0.01; float oy = u_orient.y * 0.01;
-      vec3 col = vec3(0.94,0.97,1.0);
-      float m = 0.0;
-      for(int i=0;i<5;i++){
-        float fi = float(i);
-        vec2 c = vec2(sin(t*0.6+fi*1.2+ox*3.0), cos(t*0.4+fi*0.8+oy*2.0)) * (0.25+fi*0.08+audio*0.3);
-        float r = 0.08 + fi*0.03 + audio*0.08;
-        float d = sdCircle(p, c, r);
-        m += exp(-d*d*80.0);
-      }
-      vec3 target = vec3(0.31,0.5,1.0);
-      col = mix(col, target, smoothstep(0.0, 1.8, m));
-      // add subtle pulse with audio
-      col += audio * 0.18;
-      gl_FragColor = vec4(col,1.0);
-    }`;
-
-    const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
-    // make shader more responsive: allow audio up to 2.0 for stronger effect
-    const fsSourceModified = fsSource.replace('float audio = clamp(u_audio, 0.0, 1.0);', 'float audio = clamp(u_audio, 0.0, 2.0);');
-    const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSourceModified);
-    if (!vs || !fs) return false;
-
-    program = gl.createProgram();
-    gl.attachShader(program, vs); gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.warn('Program link error', gl.getProgramInfoLog(program));
-      return false;
-    }
-
-    const posLoc = gl.getAttribLocation(program, 'a_position');
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    const verts = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
-    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-
-    uResolution = gl.getUniformLocation(program, 'u_resolution');
-    uTime = gl.getUniformLocation(program, 'u_time');
-    uAudio = gl.getUniformLocation(program, 'u_audio');
-    uOrient = gl.getUniformLocation(program, 'u_orient');
-    return true;
-  }
-
-  function drawWebGL(now) {
-    if (!gl || !program) return;
-    const w = canvas.width; const h = canvas.height;
-    gl.viewport(0, 0, w, h);
-    gl.useProgram(program);
-    gl.uniform2f(uResolution, w, h);
-    gl.uniform1f(uTime, now);
-    // amplify audio input for more dramatic visuals
-    gl.uniform1f(uAudio, getAudioLevel() * 2.0);
-    // pass orientation gamma/beta (scaled by user sensitivity)
-    gl.uniform2f(uOrient, (orientation.gamma || 0) * orientSensitivity, (orientation.beta || 0) * orientSensitivity);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    rafId = requestAnimationFrame(drawWebGL);
-  }
-
-  // fallback 2D draw (kept minimal)
-  function draw2D() {
-    if (!ctx) return;
-    const w = canvas.width; const h = canvas.height;
-    // amplify audio/tilt for stronger 2D fallback effect
-    const audio = getAudioLevel() * 2.0;
-    const tilt = (((orientation.beta || 0) * orientSensitivity) * 2.0) / 90;
-    const base = [240, 248, 255]; const target = [80,129,255];
-    const t = Math.min(1, Math.abs(tilt) * 0.7 + audio * 0.8);
-    const bg = base.map((c,i) => Math.round(lerp(c,target[i],t)));
-    ctx.fillStyle = `rgb(${bg.join(',')})`;
-    ctx.fillRect(0,0,w,h);
-    rafId = requestAnimationFrame(draw2D);
   }
 
   async function startAudio() {
@@ -169,12 +39,13 @@
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       source = audioContext.createMediaStreamSource(stream);
       analyser = audioContext.createAnalyser();
-      analyser.fftSize = 1024;
-      dataArray = new Uint8Array(analyser.fftSize);
+      analyser.fftSize = 2048;
+      dataFreq = new Uint8Array(analyser.frequencyBinCount);
+      dataTime = new Uint8Array(analyser.fftSize);
       source.connect(analyser);
       return true;
-    } catch (err) {
-      console.warn('Microfone não disponível', err);
+    } catch (e) {
+      console.warn('Microfone não disponível', e);
       return false;
     }
   }
@@ -184,72 +55,71 @@
       try {
         const perm = await DeviceOrientationEvent.requestPermission();
         if (perm !== 'granted') return false;
-      } catch (e) {
-        return false;
-      }
+      } catch (e) { return false; }
     }
-    window.addEventListener('deviceorientation', (ev) => {
-      orientation.alpha = ev.alpha; orientation.beta = ev.beta; orientation.gamma = ev.gamma;
-    });
+    window.addEventListener('deviceorientation', (ev) => { orientation.alpha = ev.alpha; orientation.beta = ev.beta; orientation.gamma = ev.gamma; window.ESFShaders && window.ESFShaders.setTilt((orientation.gamma||0)*orientSensitivity, (orientation.beta||0)*orientSensitivity); });
     return true;
+  }
+
+  // suavização exponencial simples
+  let smooth = { rms:0, bass:0, treble:0 };
+  function smoothUpdate(name, value) { smooth[name] = smooth[name]*0.85 + value*0.15; return smooth[name]; }
+
+  function analyzeAndSend() {
+    if (!analyser) return;
+    analyser.getByteFrequencyData(dataFreq);
+    analyser.getByteTimeDomainData(dataTime);
+    // RMS from time domain
+    let sum = 0; for (let i=0;i<dataTime.length;i++){ const v = (dataTime[i]-128)/128; sum += v*v; }
+    const rms = Math.sqrt(sum/dataTime.length);
+    // frequency bands
+    const n = dataFreq.length;
+    const bassEnd = Math.max(2, Math.floor(n*0.12)); // lower ~12%
+    const trebleStart = Math.max( Math.floor(n*0.35), bassEnd+1 );
+    let bassSum=0; for(let i=0;i<bassEnd;i++) bassSum += dataFreq[i];
+    let treSum=0; for(let i=trebleStart;i<n;i++) treSum += dataFreq[i];
+    const bass = (bassSum / Math.max(1,bassEnd)) / 255;
+    const tre = (treSum / Math.max(1,n-trebleStart)) / 255;
+    const r = Math.min(1, rms * 1.6 * audioSensitivity);
+    const b = Math.min(1, bass * audioSensitivity);
+    const t = Math.min(1, tre * audioSensitivity);
+    // smoothing
+    const rs = smoothUpdate('rms', r);
+    const bs = smoothUpdate('bass', b);
+    const ts = smoothUpdate('treble', t);
+    // enviar para shaders
+    window.ESFShaders && window.ESFShaders.setAudio({ rms: rs, bass: bs, treble: ts });
   }
 
   async function start() {
     if (running) return;
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
+    resizeCanvas(); window.addEventListener('resize', resizeCanvas);
     const audioOk = await startAudio();
     const orientOk = await startOrientation();
-
-    if (!audioOk && !orientOk) {
-      note.textContent = 'Sensores não disponíveis. Use em um dispositivo móvel com HTTPS e permita microfone/giroscópio.';
-      return;
-    }
-
-    // try initialize WebGL; fallback to 2D
-    const webglOk = initWebGL();
-    if (!webglOk) {
-      // fallback to 2D context
-      ctx = canvas.getContext('2d');
-    }
-
+    if (!audioOk && !orientOk) { note.textContent = 'Sensores não disponíveis. Use HTTPS no dispositivo e permita microfone/giroscópio.'; return; }
+    // iniciar shader de interação
+    if (window.ESFShaders && window.ESFShaders.initInteraction) window.ESFShaders.initInteraction();
     note.textContent = 'Interações ativas — movimente o dispositivo ou fale ao microfone.';
     running = true;
-    if (gl && program) {
-      rafId = requestAnimationFrame(drawWebGL);
-    } else {
-      rafId = requestAnimationFrame(draw2D);
-    }
+    function loop(){ analyzeAndSend(); rafId = requestAnimationFrame(loop); }
+    rafId = requestAnimationFrame(loop);
+    toggle.textContent = 'Desativar interações';
   }
 
   function stop() {
     if (!running) return;
     running = false;
     if (rafId) cancelAnimationFrame(rafId);
-    if (audioContext && audioContext.state !== 'closed') audioContext.close();
-    window.removeEventListener('resize', resizeCanvas);
+    try { if (audioContext && audioContext.state !== 'closed') audioContext.close(); } catch(e){}
+    if (source && source.mediaStream) { try { source.mediaStream.getTracks().forEach(t => t.stop()); } catch(e){} }
+    audioContext = null; analyser = null; dataFreq = null; dataTime = null; source = null;
+    window.ESFShaders && window.ESFShaders.setAudio({ rms:0, bass:0, treble:0 });
     note.textContent = 'Interações desativadas.';
-    // cleanup webgl resources
-    try {
-      if (gl && program) {
-        gl.deleteProgram(program);
-        program = null;
-        gl = null;
-      }
-    } catch (e) { /* ignore */ }
+    toggle.textContent = 'Ativar interações';
   }
 
-  toggle.addEventListener('click', async () => {
-    if (!running) {
-      await start();
-      toggle.textContent = 'Desativar interações';
-    } else {
-      stop();
-      toggle.textContent = 'Ativar interações';
-    }
-  });
+  toggle && toggle.addEventListener('click', async () => { if (!running) await start(); else stop(); });
 
-  // ensure canvas is hidden on small devices if not supported
+  // inicial resize
   resizeCanvas();
 })();
