@@ -1,4 +1,4 @@
-# ESF-01 — Testes manuais
+# v1su4rt — Testes manuais
 
 Documento de verificação manual para funcionalidades PWA, Service Worker e sensores (microfone e giroscópio).
 
@@ -47,7 +47,7 @@ Documento de verificação manual para funcionalidades PWA, Service Worker e sen
   2. Verificar campos: name, short_name, start_url, display, theme_color.
   3. Verificar presença dos ícones 192 e 512.
 - Resultado esperado:
-  - name e short_name corretos; icons com 192x192 e 512x512 listados; theme_color #f4f7ff; display = standalone.
+   - name e short_name corretos; icons com 192x192 e 512x512 listados; theme_color #0a0c10; display = standalone.
 - Como corrigir se falhar:
   - Ajustar manifest.webmanifest; garantir que arquivos em ./icons/ existam e caminhos estejam corretos.
 

@@ -102,10 +102,10 @@
         return;
       }
 
-      if (installPrompt) {
-        installPrompt.prompt();
-        const choice = await installPrompt.userChoice;
-        showToast(choice.outcome === 'accepted' ? 'ESF-01 foi instalado.' : 'Instalação cancelada.');
+        if (installPrompt) {
+          installPrompt.prompt();
+          const choice = await installPrompt.userChoice;
+          showToast(choice.outcome === 'accepted' ? 'v1su4rt foi instalado.' : 'Instalação cancelada.');
         installPrompt = null;
         installButtons.forEach((b) => { b.hidden = true; });
         return;

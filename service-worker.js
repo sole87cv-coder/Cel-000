@@ -1,4 +1,5 @@
-const CACHE_NAME = 'esf-01-v2';
+// service-worker.js — CACHE_NAME atualizado para v1su4rt-v2 (incremento de versão)
+const CACHE_NAME = 'v1su4rt-v2';
 const APP_FILES = [
   './',
   './index.html',

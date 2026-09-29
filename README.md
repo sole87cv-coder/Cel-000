@@ -1,4 +1,4 @@
-# ESF-01
+# v1su4rt
 Web interativa
 
 Site responsivo em português, sem dependências externas. A demonstração alterna a prévia entre celular, tablet e desktop. Manifesto e service worker oferecem instalação e cache offline em hospedagens compatíveis.
@@ -31,7 +31,7 @@ Envie o conteúdo desta pasta para uma hospedagem de site estático com HTTPS. O
 - `assets/styles.css`: estilos responsivos (agora organizados em assets/).
 - `assets/app.js`: navegação, prévia interativa e instalação (agora em assets/).
 - `manifest.webmanifest` e `icon.svg`: metadados e ícone do app.
-- `icons/`: ícones PNG nos tamanhos usados pelo manifesto de instalação.
+ - `icons/`: ícones PNG nos tamanhos usados pelo manifesto de instalação. (substitua pelos PNG finais se desejar)
 - `assets/icons/`: ícones PNG gerados (192x192 e 512x512) para compatibilidade Android.
 - `service-worker.js`: cache dos arquivos principais para visitas offline.
 - `privacy.html`: resumo de privacidade deste exemplo.
