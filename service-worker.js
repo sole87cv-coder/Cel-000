@@ -1,5 +1,6 @@
-// service-worker.js — CACHE_NAME atualizado para v1su4rt-v2 (incremento de versão)
-const CACHE_NAME = 'v1su4rt-v2';
+// service-worker.js — cache offline do v1su4rt.
+// Ao alterar qualquer arquivo em APP_FILES, aumente CACHE_NAME.
+const CACHE_NAME = 'v1su4rt-v3';
 const APP_FILES = [
   './',
   './index.html',
@@ -7,19 +8,22 @@ const APP_FILES = [
   './manifest.webmanifest',
   './icon.svg',
   './assets/styles.css',
-  './assets/app.js',
-  './assets/interaction.js',
   './assets/shaders.js',
+  './assets/interaction.js',
+  './assets/app.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-maskable-512.png',
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => Promise.all(APP_FILES.map((url) => cache.add(url).catch((err) => {
-      // Registrar individualmente para evitar falha total se um arquivo não existir
-      console.warn('Falha ao adicionar ao cache:', url, err);
-    })))).then(() => self.skipWaiting()),
+    caches.open(CACHE_NAME)
+      .then((cache) => Promise.all(APP_FILES.map((url) => cache.add(url).catch((err) => {
+        // um arquivo ausente não derruba a instalação inteira
+        console.warn('Falha ao adicionar ao cache:', url, err);
+      }))))
+      .then(() => self.skipWaiting()),
   );
 });
 
@@ -35,13 +39,15 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
 
+  // páginas: tenta a rede e atualiza o cache; offline, usa o que estiver guardado
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       try {
         const response = await fetch(request);
-        // atualiza cache em segundo plano
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
         return response;
       } catch (err) {
         return (await caches.match(request)) || (await caches.match('./index.html'));
@@ -50,6 +56,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // arquivos: cache primeiro
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

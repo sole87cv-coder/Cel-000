@@ -1,159 +1,209 @@
-(() => {
-  // assets/interaction.js
-  // Alteração: envia {audio,bass,treble,tiltX,tiltY} para window.v1su4rtShaders.setAudio
-  // Ajustes: médias dos bins, suavização attack/release, tilt normalizado -1..1
-  const toggle = document.getElementById('interaction-toggle');
-  const note = document.getElementById('interaction-note');
-  const canvas = document.getElementById('interaction-canvas');
-  const audioSlider = document.getElementById('audio-sens');
-  const orientSlider = document.getElementById('orient-sens');
-  const audioValueSpan = document.getElementById('audio-sens-value');
-  const orientValueSpan = document.getElementById('orient-sens-value');
+/* v1su4rt — sensores: microfone (AudioContext + AnalyserNode) e giroscópio
+   (deviceorientation). Nada é gravado nem enviado: os valores só alimentam o shader. */
+(function () {
+  'use strict';
 
-  let audioContext = null;
-  let analyser = null;
-  let dataFreq = null;
-  let dataTime = null;
-  let source = null;
-  let rafId = null;
-  let running = false;
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
-  let audioSensitivity = audioSlider ? parseFloat(audioSlider.value) || 1.0 : 1.0;
-  let orientSensitivity = orientSlider ? parseFloat(orientSlider.value) || 1.0 : 1.0;
+  class V1Interaction {
+    constructor() {
+      this.audioSens = 1.5;
+      this.orientSens = 1.5;
+      this.sm = { level: 0, bass: 0, mid: 0, treble: 0 };
+      this.bassAvg = 0;
+      this.pulse = 0;
+      this.tgt = { x: 0, y: 0 };
+      this.tilt = { x: 0, y: 0 };
+      this._onOrient = this._onOrient.bind(this);
+      this._clearSession();
 
-  audioValueSpan && (audioValueSpan.textContent = audioSensitivity.toFixed(2));
-  orientValueSpan && (orientValueSpan.textContent = orientSensitivity.toFixed(2));
-
-  audioSlider && audioSlider.addEventListener('input', () => { audioSensitivity = parseFloat(audioSlider.value) || 1.0; audioValueSpan && (audioValueSpan.textContent = audioSensitivity.toFixed(2)); });
-  orientSlider && orientSlider.addEventListener('input', () => { orientSensitivity = parseFloat(orientSlider.value) || 1.0; orientValueSpan && (orientValueSpan.textContent = orientSensitivity.toFixed(2)); });
-
-  let orientation = { alpha:0, beta:0, gamma:0 };
-  let tiltX = 0; // -1..1
-  let tiltY = 0; // -1..1
-
-  function resizeCanvas() {
-    if (!canvas) return;
-    canvas.width = canvas.clientWidth || window.innerWidth;
-    canvas.height = Math.min(380, window.innerHeight * 0.45);
-  }
-
-  async function startAudio() {
-    try {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      source = audioContext.createMediaStreamSource(stream);
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      dataFreq = new Uint8Array(analyser.frequencyBinCount);
-      dataTime = new Uint8Array(analyser.fftSize);
-      source.connect(analyser);
-      return true;
-    } catch (e) {
-      console.warn('Microfone não disponível', e);
-      return false;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+      });
     }
-  }
 
-  async function startOrientation() {
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    get active() { return this.audioOn || this.orientOn; }
+
+    _clearSession() {
+      this.ctx = null;
+      this.stream = null;
+      this.analyser = null;
+      this.freq = null;
+      this.wave = null;
+      this.audioOn = false;
+      this.orientOn = false;
+      this.orientSeen = false;
+      this.base = null;
+      this.baseAng = null;
+      this.tgt.x = 0;
+      this.tgt.y = 0;
+    }
+
+    /* Deve ser chamado dentro de um clique/toque: as duas permissões
+       são pedidas de imediato, sem esperar uma pela outra (exigência do iOS). */
+    async start(onGyro) {
+      const out = { audio: 'unsupported', orientation: 'unsupported' };
+      if (!window.isSecureContext) {
+        out.audio = out.orientation = 'insecure';
+        return out;
+      }
+      const gyroP = this._requestOrientation();
+      const audioP = this._startAudio();
+      const [g, a] = await Promise.all([gyroP, audioP]);
+      out.orientation = g;
+      out.audio = a;
+      this.audioOn = a === 'ok';
+      this.orientOn = g === 'ok';
+
+      if (this.orientOn) {
+        window.addEventListener('deviceorientation', this._onOrient);
+        // computadores disparam o evento sem valores: se nada útil chegar, avisa
+        this._gyroTimer = setTimeout(() => {
+          if (!this.orientSeen) {
+            this.orientOn = false;
+            window.removeEventListener('deviceorientation', this._onOrient);
+            if (onGyro) onGyro('unavailable');
+          } else if (onGyro) {
+            onGyro('ok');
+          }
+        }, 1500);
+      }
+      return out;
+    }
+
+    stop() {
+      clearTimeout(this._gyroTimer);
+      window.removeEventListener('deviceorientation', this._onOrient);
+      if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+      if (this.ctx) { try { this.ctx.close(); } catch (e) { /* ignora */ } }
+      this._clearSession();
+    }
+
+    async _requestOrientation() {
+      if (!('DeviceOrientationEvent' in window)) return 'unsupported';
+      const D = window.DeviceOrientationEvent;
+      if (typeof D.requestPermission === 'function') {
+        try {
+          const r = await D.requestPermission();
+          return r === 'granted' ? 'ok' : 'denied';
+        } catch (e) {
+          return 'denied';
+        }
+      }
+      return 'ok';
+    }
+
+    async _startAudio() {
+      const md = navigator.mediaDevices;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!md || !md.getUserMedia || !AC) return 'unsupported';
+      let ctx;
+      try { ctx = new AC(); } catch (e) { return 'unsupported'; }
       try {
-        const perm = await DeviceOrientationEvent.requestPermission();
-        if (perm !== 'granted') return false;
-      } catch (e) { return false; }
+        if (ctx.resume) ctx.resume().catch(() => {});
+        const stream = await md.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        if (ctx.state === 'suspended') await ctx.resume();
+        const src = ctx.createMediaStreamSource(stream);
+        const an = ctx.createAnalyser();
+        an.fftSize = 1024;
+        an.smoothingTimeConstant = 0.4;
+        src.connect(an); // sem ligar na saída: não há retorno de áudio
+        this.ctx = ctx;
+        this.stream = stream;
+        this.analyser = an;
+        this.freq = new Uint8Array(an.frequencyBinCount);
+        this.wave = new Uint8Array(an.fftSize);
+        return 'ok';
+      } catch (e) {
+        try { ctx.close(); } catch (_) { /* ignora */ }
+        return e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'denied' : 'error';
+      }
     }
-    window.addEventListener('deviceorientation', (ev) => {
-      orientation.alpha = ev.alpha; orientation.beta = ev.beta; orientation.gamma = ev.gamma;
-      // normalizar gamma (tiltX) e beta (tiltY) por 45deg e aplicar sensibilidade
-      const g = (orientation.gamma || 0) / 45 * orientSensitivity;
-      const b = (orientation.beta || 0) / 45 * orientSensitivity;
-      tiltX = Math.max(-1, Math.min(1, g));
-      tiltY = Math.max(-1, Math.min(1, b));
-    });
-    return true;
-  }
 
-  // suavização exponencial (attack 0.15, release 0.08)
-  let smooth = { audio:0, bass:0, treble:0 };
-  const attack = 0.15;
-  const release = 0.08;
-  function smoothUpdate(name, value) {
-    const prev = smooth[name] || 0;
-    const coeff = value > prev ? attack : release;
-    const next = prev * (1 - coeff) + value * coeff;
-    smooth[name] = next;
-    return next;
-  }
+    _angle() {
+      let a = 0;
+      if (window.screen.orientation && typeof window.screen.orientation.angle === 'number') a = window.screen.orientation.angle;
+      else if (typeof window.orientation === 'number') a = window.orientation;
+      return ((a % 360) + 360) % 360;
+    }
 
-  function analyzeAndSend() {
-    if (!analyser) return;
-    analyser.getByteFrequencyData(dataFreq);
-    // média dos bins 0..255 como nível geral (audio)
-    const n = dataFreq.length;
-    const maxBin = Math.min(255, n - 1);
-    let sumAll = 0; for (let i = 0; i <= maxBin; i++) sumAll += dataFreq[i];
-    const avgAll = sumAll / Math.max(1, maxBin + 1) / 255; // 0..1
+    _onOrient(e) {
+      if (e.gamma == null || e.beta == null) return;
+      this.orientSeen = true;
+      const ang = this._angle();
+      let ax = e.gamma;
+      let ay = e.beta;
+      if (ang === 90) { ax = e.beta; ay = -e.gamma; }
+      else if (ang === 270) { ax = -e.beta; ay = e.gamma; }
+      else if (ang === 180) { ax = -e.gamma; ay = -e.beta; }
+      // a posição em que o aparelho está ao ativar vira o centro
+      if (this.base === null || this.baseAng !== ang) {
+        this.base = { x: ax, y: ay };
+        this.baseAng = ang;
+      }
+      this.tgt.x = clamp((ax - this.base.x) / 40, -1, 1);
+      this.tgt.y = clamp((ay - this.base.y) / 40, -1, 1);
+    }
 
-    // graves: bins 0..8
-    const bassEnd = Math.min(8, n - 1);
-    let bassSum = 0; for (let i = 0; i <= bassEnd; i++) bassSum += dataFreq[i];
-    const bassRaw = (bassSum / Math.max(1, bassEnd + 1)) / 255;
+    _band(lo, hi, hz) {
+      const a = Math.max(1, Math.floor(lo / hz));
+      const b = Math.min(this.freq.length - 1, Math.ceil(hi / hz));
+      let s = 0;
+      for (let i = a; i <= b; i++) s += this.freq[i];
+      const avg = s / ((b - a + 1) * 255);
+      return clamp((avg - 0.10) / 0.5, 0, 1);
+    }
 
-    // agudos: bins 24..64
-    const treStart = Math.min(24, n - 1);
-    const treEnd = Math.min(64, n - 1);
-    let treSum = 0; for (let i = treStart; i <= treEnd; i++) treSum += dataFreq[i];
-    const treRaw = (treSum / Math.max(1, treEnd - treStart + 1)) / 255;
+    update(dt) {
+      let L = 0, B = 0, M = 0, T = 0;
+      if (this.audioOn && this.analyser) {
+        const an = this.analyser;
+        an.getByteFrequencyData(this.freq);
+        an.getByteTimeDomainData(this.wave);
+        let s = 0;
+        for (let i = 0; i < this.wave.length; i++) {
+          const v = (this.wave[i] - 128) / 128;
+          s += v * v;
+        }
+        L = clamp(Math.sqrt(s / this.wave.length) * 5, 0, 1);
+        const hz = this.ctx.sampleRate / an.fftSize;
+        B = this._band(20, 250, hz);
+        M = this._band(250, 2000, hz);
+        T = this._band(2000, 9000, hz);
+      }
+      const ease = (cur, target) => cur + (target - cur) * (1 - Math.exp(-dt * (target > cur ? 28 : 4)));
+      this.sm.level = ease(this.sm.level, L);
+      this.sm.bass = ease(this.sm.bass, B);
+      this.sm.mid = ease(this.sm.mid, M);
+      this.sm.treble = ease(this.sm.treble, T);
 
-    // aplicar sensibilidade
-    const audioRaw = Math.min(1, avgAll * audioSensitivity);
-    const bassVal = Math.min(1, bassRaw * audioSensitivity);
-    const treVal = Math.min(1, treRaw * audioSensitivity);
+      // batida: os graves saltam acima da média recente
+      this.bassAvg += (B - this.bassAvg) * (1 - Math.exp(-dt * 1.2));
+      if (B - this.bassAvg > 0.16 && this.pulse < 0.35) this.pulse = 1;
+      this.pulse *= Math.exp(-dt * 4.5);
 
-    // suavização
-    const sa = smoothUpdate('audio', audioRaw);
-    const sb = smoothUpdate('bass', bassVal);
-    const st = smoothUpdate('treble', treVal);
+      const k = 1 - Math.exp(-dt * 9);
+      this.tilt.x += (this.tgt.x - this.tilt.x) * k;
+      this.tilt.y += (this.tgt.y - this.tilt.y) * k;
+    }
 
-    // enviar para shaders conforme contrato
-    if (window.v1su4rtShaders && typeof window.v1su4rtShaders.setAudio === 'function'){
-      window.v1su4rtShaders.setAudio({ audio: sa, bass: sb, treble: st, tiltX: tiltX, tiltY: tiltY });
+    /* Valores prontos para o shader, já com a sensibilidade aplicada. */
+    read() {
+      const g = this.audioSens;
+      const c = (v) => clamp(v * g, 0, 1.6);
+      return {
+        level: c(this.sm.level),
+        bass: c(this.sm.bass),
+        mid: c(this.sm.mid),
+        treble: c(this.sm.treble),
+        pulse: clamp(this.pulse * g, 0, 1.5),
+        tiltX: clamp(this.tilt.x * this.orientSens, -2, 2),
+        tiltY: clamp(this.tilt.y * this.orientSens, -2, 2),
+      };
     }
   }
 
-  async function start() {
-    if (running) return;
-    resizeCanvas(); window.addEventListener('resize', resizeCanvas);
-    const audioOk = await startAudio();
-    const orientOk = await startOrientation();
-    if (!audioOk && !orientOk) {
-      note.textContent = 'Sensores não disponíveis. Use HTTPS no dispositivo e permita microfone/giroscópio.';
-      // informar zeros ao shader
-      if (window.v1su4rtShaders && window.v1su4rtShaders.setAudio) window.v1su4rtShaders.setAudio({ audio:0, bass:0, treble:0, tiltX:0, tiltY:0 });
-      return;
-    }
-    // iniciar shader de interação
-    if (window.ESFShaders && window.ESFShaders.initInteraction) window.ESFShaders.initInteraction();
-    note.textContent = 'Interações ativas — movimente o dispositivo ou fale ao microfone.';
-    running = true;
-    function loop(){ analyzeAndSend(); rafId = requestAnimationFrame(loop); }
-    rafId = requestAnimationFrame(loop);
-    toggle.textContent = 'Desativar interações';
-  }
-
-  function stop() {
-    if (!running) return;
-    running = false;
-    if (rafId) cancelAnimationFrame(rafId);
-    try { if (audioContext && audioContext.state !== 'closed') audioContext.close(); } catch(e){}
-    if (source && source.mediaStream) { try { source.mediaStream.getTracks().forEach(t => t.stop()); } catch(e){} }
-    audioContext = null; analyser = null; dataFreq = null; dataTime = null; source = null;
-    if (window.v1su4rtShaders && window.v1su4rtShaders.setAudio) window.v1su4rtShaders.setAudio({ audio:0, bass:0, treble:0, tiltX:0, tiltY:0 });
-    note.textContent = 'Interações desativadas.';
-    toggle.textContent = 'Ativar interações';
-  }
-
-  toggle && toggle.addEventListener('click', async () => { if (!running) await start(); else stop(); });
-
-  // inicial resize
-  resizeCanvas();
+  window.V1Interaction = V1Interaction;
 })();
