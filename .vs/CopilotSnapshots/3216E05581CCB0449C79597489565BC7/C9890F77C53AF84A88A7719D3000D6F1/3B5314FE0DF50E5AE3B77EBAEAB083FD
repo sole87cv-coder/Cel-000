@@ -1,0 +1,16 @@
+﻿{
+  "id": "./",
+  "name": "ESF-01 — Web que se adapta",
+  "short_name": "ESF-01",
+  "description": "Um exemplo leve de site responsivo, instalável e pronto para funcionar offline.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8fd",
+  "theme_color": "#f4f7ff",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "./assets/icons/icon-512.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

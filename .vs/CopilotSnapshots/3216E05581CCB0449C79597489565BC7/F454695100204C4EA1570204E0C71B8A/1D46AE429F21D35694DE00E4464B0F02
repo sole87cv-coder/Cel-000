@@ -1,5 +1,4 @@
-# ESF-01
-Web interativa
+﻿# ESF-01
 
 Site responsivo em português, sem dependências externas. A demonstração alterna a prévia entre celular, tablet e desktop. Manifesto e service worker oferecem instalação e cache offline em hospedagens compatíveis.
 
@@ -52,51 +51,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1 -RepoPath "C:\User
 
 O script faz: git add ., git commit -m <mensagem> e git push origin main. Verifique se o Git está instalado e se você tem permissão para push.
 
-## Subir do celular — passo a passo (Android / iOS)
-
-Escolha o método abaixo conforme sua preferência. Recomendo o método A (Web) para maior simplicidade em muitos casos.
-
-Opção A — Usando o navegador (Chrome no Android) — mais simples
-1. No celular, abra https://github.com e faça login na sua conta.
-2. Toque em + (canto superior) → New repository. Defina um nome (ex.: ESF-01) e crie o repositório público ou privado.
-3. Na página do repositório recém-criado, toque em Add file → Upload files.
-4. Toque em Choose your files e selecione os arquivos do projeto. Para subir pastas inteiras, abra o gerenciador de arquivos do celular, selecione todos os arquivos necessários (index.html, manifest.webmanifest, service-worker.js, icon.svg, assets/ etc.). Pode ser necessário repetir o upload por pastas se o navegador não permitir seleção de pastas.
-5. Depois de selecionar os arquivos, role a página e toque em Commit changes.
-6. Repita até que todos os arquivos e pastas estejam no repositório (verifique a árvore de arquivos no GitHub).
-
-Opção B — Usando Termux (Android) — recomendado se quiser controlar commits e subir pastas inteiras
-1. Instale Termux na Play Store / F-Droid e abra o app.
-2. Configure Git no Termux:
-   - pkg install git
-   - git config --global user.name "Seu Nome"
-   - git config --global user.email "seu@email"
-3. Clone o repositório vazio que você criou no GitHub:
-   - git clone https://github.com/SEU_USUARIO/ESF-01.git
-4. Copie os arquivos do gerenciador de arquivos do Android para a pasta do repo (use o app de arquivos para mover ou termos como mv cp no Termux se tiver acesso).
-5. No Termux, dentro da pasta do repo:
-   - git add .
-   - git commit -m "Deploy PWA + shader interativo"
-   - git push origin main
-
-Opção C — Usando o app GitHub (interface limitada)
-- O app oficial permite criar repositórios e ver código, mas o upload de muitos arquivos pode ser limitado. Use-o para criar o repo e depois use a Opção A para upload de arquivos via web.
-
-Ativar GitHub Pages
-1. No repositório no celular, abra Settings → Pages (ou Code and automation → Pages).
-2. Em Source, escolha Branch: main e Folder: / (root). Salve.
-3. Aguarde alguns minutos; a URL do site será https://SEU_USUARIO.github.io/ESF-01
-
-Testar no celular (finalizar)
-1. Abra a URL HTTPS gerada no Chrome do Android.
-2. Vá em Demonstração → toque em "Ativar interações" (gesture obrigatório). Permita Microfone; permita Movimento/Orientation se solicitado.
-3. Ajuste os sliders de sensibilidade (áudio / giroscópio) para calibrar a experiência.
-4. Para testar instalação PWA: aguarde o navegador sugerir instalação ou use o menu do Chrome → Add to Home screen.
-
-Resolução de problemas rápidos
-- Se o microfone não funcionar: verifique permissões do site (Chrome → Site settings → Microphone).
-- Se o giroscópio não responder: verifique versão do Android e permissões; alguns navegadores exigem que a permissão seja dada após um gesto do usuário.
-- Se o site mostrar versão antiga: limpe cache ou vá em DevTools → Application → Service Workers e desregistre o SW (apenas em desktop) ou desinstale e reinstale a PWA.
-
 ## Testar sensores e instalação PWA
 
 - Para testar o fluxo de instalação e o uso de microfone/giroscópio, o site deve ser servido por HTTPS ou usar `localhost`.
@@ -110,4 +64,3 @@ Obs: Foram gerados PNGs placeholder em assets/icons/ (icon-192.png e icon-512.pn
 magick convert icon.svg -resize 192x192 assets/icons/icon-192.png
 magick convert icon.svg -resize 512x512 assets/icons/icon-512.png
 ```
-

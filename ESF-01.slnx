@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/Site/">
+    <File Path=".gitignore" />
+    <File Path=".nojekyll" />
+    <File Path="app.js" />
+    <File Path="icon.svg" />
+    <File Path="index.html" />
+    <File Path="manifest.webmanifest" />
+    <File Path="service-worker.js" />
+    <File Path="styles.css" />
+    <Folder Name="/Site/ícones/">
+      <File Path="icons/icon-192.png" />
+      <File Path="icons/icon-512.png" />
+    </Folder>
+  </Folder>
+  <Folder Name="/Documentação/">
+    <File Path="README.md" />
+    <File Path="privacy.html" />
+  </Folder>
+</Solution>

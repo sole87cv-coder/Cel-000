@@ -1,0 +1,134 @@
+﻿(() => {
+  const toggle = document.getElementById('interaction-toggle');
+  const note = document.getElementById('interaction-note');
+  const canvas = document.getElementById('interaction-canvas');
+  const ctx = canvas.getContext('2d');
+  let running = false;
+  let audioContext = null;
+  let analyser = null;
+  let dataArray = null;
+  let source = null;
+  let orientation = { alpha: 0, beta: 0, gamma: 0 };
+  let rafId = null;
+
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = Math.min(380, window.innerHeight * 0.45);
+  }
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function getAudioLevel() {
+    if (!analyser) return 0;
+    analyser.getByteTimeDomainData(dataArray);
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const v = (dataArray[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / dataArray.length);
+    return Math.min(1, rms * 5);
+  }
+
+  function draw() {
+    const w = canvas.width; const h = canvas.height;
+    const audio = getAudioLevel();
+    const tilt = (orientation.beta || 0) / 90; // -1..1 roughly
+
+    // background color interpolates with audio and tilt
+    const base = [240, 248, 255]; // #f0f8ff
+    const target = [80, 129, 255]; // blue
+    const t = Math.min(1, Math.abs(tilt) * 0.7 + audio * 0.8);
+    const bg = base.map((c, i) => Math.round(lerp(c, target[i], t)));
+    ctx.fillStyle = `rgb(${bg.join(',')})`;
+    ctx.fillRect(0, 0, w, h);
+
+    // draw floating shapes that react to audio & orientation
+    const cx = w / 2 + (orientation.gamma || 0) * 1.5;
+    const cy = h / 2 + (orientation.beta || 0) * 1.2;
+    const count = 6;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + Date.now() / (800 - i * 60);
+      const radius = 40 + i * 18 + audio * 120;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius * (1 - Math.abs(tilt) * 0.6);
+      const size = 18 + i * 6 + audio * 36;
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(255,255,255,${0.12 + i * 0.08 + audio * 0.2})`;
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    rafId = requestAnimationFrame(draw);
+  }
+
+  async function startAudio() {
+    try {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      source = audioContext.createMediaStreamSource(stream);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      dataArray = new Uint8Array(analyser.fftSize);
+      source.connect(analyser);
+      return true;
+    } catch (err) {
+      console.warn('Microfone não disponível', err);
+      return false;
+    }
+  }
+
+  async function startOrientation() {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        const perm = await DeviceOrientationEvent.requestPermission();
+        if (perm !== 'granted') return false;
+      } catch (e) {
+        return false;
+      }
+    }
+    window.addEventListener('deviceorientation', (ev) => {
+      orientation.alpha = ev.alpha; orientation.beta = ev.beta; orientation.gamma = ev.gamma;
+    });
+    return true;
+  }
+
+  async function start() {
+    if (running) return;
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    const audioOk = await startAudio();
+    const orientOk = await startOrientation();
+
+    if (!audioOk && !orientOk) {
+      note.textContent = 'Sensores não disponíveis. Use em um dispositivo móvel com HTTPS e permita microfone/giroscópio.';
+      return;
+    }
+    note.textContent = 'Interações ativas — movimente o dispositivo ou fale ao microfone.';
+    running = true;
+    draw();
+  }
+
+  function stop() {
+    if (!running) return;
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (audioContext && audioContext.state !== 'closed') audioContext.close();
+    window.removeEventListener('resize', resizeCanvas);
+    note.textContent = 'Interações desativadas.';
+  }
+
+  toggle.addEventListener('click', async () => {
+    if (!running) {
+      await start();
+      toggle.textContent = 'Desativar interações';
+    } else {
+      stop();
+      toggle.textContent = 'Ativar interações';
+    }
+  });
+
+  // ensure canvas is hidden on small devices if not supported
+  resizeCanvas();
+})();
