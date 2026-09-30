@@ -1,6 +1,6 @@
-# v1su4rt
+# s0leVj
 
-Shaders visuais em tela cheia que reagem ao **microfone** e ao **giroscópio**. Site estático, sem dependências, instalável (PWA) e com cache offline.
+Shaders visuais em tela cheia que reagem ao **microfone**, ao **giroscópio** e ao mouse/toque. Site estático, sem dependências, instalável (PWA) e com cache offline.
 
 A tela mostra só o visual e um painel pequeno: botão **Ativar interações**, os dois controles de sensibilidade (áudio e giroscópio) e um botão para recolher o painel.
 
@@ -8,12 +8,11 @@ A tela mostra só o visual e um painel pequeno: botão **Ativar interações**, 
 
 | Entrada | Efeito |
 | --- | --- |
-| Volume | ondas a partir do centro, brilho das linhas |
-| Graves | amplitude da deformação; batidas dão um pulso |
-| Médios | deslocamento de cor |
-| Agudos | pontos brilhantes |
-| Giroscópio | move o centro das formas (a posição ao ativar vira o zero) |
-| Mouse / toque | mesmo efeito do giroscópio, para telas sem sensor |
+| Volume | controla a escala (respiração) e a intensidade da luz; silêncio = wireframe |
+| Graves | puxa a paleta para magenta; batidas aumentam pulso e halo |
+| Médios | deslocam a cor base |
+| Agudos | brilhos nas arestas e vértices; faíscas no fundo |
+| Giroscópio / mouse / toque | inclina o dodecaedro e cria parallax no fundo |
 
 ## Celular, tablet e desktop
 
@@ -41,9 +40,9 @@ Abra `http://localhost:8000`. O microfone funciona em `localhost`; o giroscópio
 ## Arquivos
 
 - `index.html`: página, canvas e painel.
-- `assets/shaders.js`: shader (GLSL). É aqui que se muda o visual.
-- `assets/interaction.js`: microfone (graves, médios, agudos, volume) e giroscópio.
-- `assets/app.js`: renderização, resolução adaptativa, painel e service worker.
+- `assets/shaders.js`: renderizador principal (WebGL) + fallback Canvas2D; cria seu próprio loop, modo econômico, pausa por visibilidade/IntersectionObserver e expõe `window.s0leVjShaders`.
+- `assets/interaction.js`: captura e processa microfone (volume, graves, médios, agudos), giroscópio e ponteiro; gerencia #interaction-toggle e sliders; envia os dados para `window.s0leVjShaders.setAudio(...)`.
+- `assets/app.js`: reduzido — fica com o painel (recolher) e o registro do service worker; não duplica o render.
 - `assets/styles.css`: layout responsivo.
 - `manifest.webmanifest`, `icon.svg`, `icons/`: instalação como app.
 - `service-worker.js`: cache offline. Ao mudar qualquer arquivo, aumente `CACHE_NAME`.

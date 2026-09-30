@@ -1,6 +1,6 @@
-// service-worker.js — cache offline do v1su4rt.
+// service-worker.js — cache offline do s0leVj.
 // Ao alterar qualquer arquivo em APP_FILES, aumente CACHE_NAME.
-const CACHE_NAME = 'v1su4rt-v3';
+const CACHE_NAME = 's0leVj-v4';
 const APP_FILES = [
   './',
   './index.html',
@@ -22,8 +22,7 @@ self.addEventListener('install', (event) => {
       .then((cache) => Promise.all(APP_FILES.map((url) => cache.add(url).catch((err) => {
         // um arquivo ausente não derruba a instalação inteira
         console.warn('Falha ao adicionar ao cache:', url, err);
-      }))))
-      .then(() => self.skipWaiting()),
+      })))).then(() => self.skipWaiting()),
   );
 });
 

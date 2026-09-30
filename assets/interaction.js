@@ -1,209 +1,173 @@
-/* v1su4rt — sensores: microfone (AudioContext + AnalyserNode) e giroscópio
-   (deviceorientation). Nada é gravado nem enviado: os valores só alimentam o shader. */
-(function () {
+// assets/interaction.js
+// Captura do microfone (volume, bass, mid, treble), giroscópio e ponteiro.
+// Atualiza o painel (#interaction-toggle, #audio-sens, #orient-sens, #interaction-status).
+// Envia dados para window.s0leVjShaders.setAudio(...)
+;(function () {
   'use strict';
 
-  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const $ = (id) => document.getElementById(id);
+  const toggle = $('interaction-toggle');
+  const status = $('interaction-status');
+  const audioSens = $('audio-sens');
+  const orientSens = $('orient-sens');
+  const audioVal = $('audio-sens-value');
+  const orientVal = $('orient-sens-value');
 
-  class V1Interaction {
-    constructor() {
-      this.audioSens = 1.5;
-      this.orientSens = 1.5;
-      this.sm = { level: 0, bass: 0, mid: 0, treble: 0 };
-      this.bassAvg = 0;
-      this.pulse = 0;
-      this.tgt = { x: 0, y: 0 };
-      this.tilt = { x: 0, y: 0 };
-      this._onOrient = this._onOrient.bind(this);
-      this._clearSession();
+  // estado local
+  let audioCtx = null;
+  let analyser = null;
+  let source = null;
+  let dataArray = null;
+  let raf = 0;
+  let active = false;
+  let stream = null;
 
-      document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
-      });
+  function setStatus(msg, kind) {
+    if (!status) return;
+    status.textContent = msg || '';
+    status.dataset.kind = kind || 'ok';
+  }
+
+  function paintButton() {
+    if (!toggle) return;
+    toggle.textContent = active ? 'Desativar interações' : 'Ativar interações';
+    toggle.setAttribute('aria-pressed', String(active));
+  }
+
+  // compute bands from frequency data
+  function computeBands(freq) {
+    const len = freq.length;
+    let bass = 0, mid = 0, treble = 0, sum = 0;
+    for (let i = 0; i < len; i++) {
+      const v = freq[i] / 255;
+      sum += v;
+      const f = i / len;
+      if (f < 0.15) bass += v;
+      else if (f < 0.6) mid += v;
+      else treble += v;
     }
+    const total = sum / len;
+    bass = bass / (len * 0.15) || 0;
+    mid = mid / (len * 0.45) || 0;
+    treble = treble / (len * 0.4) || 0;
+    return { audio: total, bass: Math.min(1, bass), mid: Math.min(1, mid), treble: Math.min(1, treble) };
+  }
 
-    get active() { return this.audioOn || this.orientOn; }
-
-    _clearSession() {
-      this.ctx = null;
-      this.stream = null;
-      this.analyser = null;
-      this.freq = null;
-      this.wave = null;
-      this.audioOn = false;
-      this.orientOn = false;
-      this.orientSeen = false;
-      this.base = null;
-      this.baseAng = null;
-      this.tgt.x = 0;
-      this.tgt.y = 0;
+  // animation loop: reads analyser and dispatches to shader
+  function loop() {
+    if (!active) return;
+    if (!analyser) { raf = requestAnimationFrame(loop); return; }
+    analyser.getByteFrequencyData(dataArray);
+    const bands = computeBands(dataArray);
+    // apply sensitivity
+    const sens = parseFloat(audioSens ? audioSens.value : 1.0);
+    bands.audio = Math.pow(bands.audio * sens, 1.0);
+    bands.bass = Math.pow(bands.bass * sens, 1.1);
+    bands.mid = Math.pow(bands.mid * sens, 1.0);
+    bands.treble = Math.pow(bands.treble * sens, 0.9);
+    // tilt from last known or zeros
+    const tilt = lastTilt || [0,0];
+    const zoom = 1.0;
+    // send
+    if (window.s0leVjShaders && typeof window.s0leVjShaders.setAudio === 'function') {
+      window.s0leVjShaders.setAudio({ audio: bands.audio, bass: bands.bass, mid: bands.mid, treble: bands.treble, tilt, zoom });
     }
+    raf = requestAnimationFrame(loop);
+  }
 
-    /* Deve ser chamado dentro de um clique/toque: as duas permissões
-       são pedidas de imediato, sem esperar uma pela outra (exigência do iOS). */
-    async start(onGyro) {
-      const out = { audio: 'unsupported', orientation: 'unsupported' };
-      if (!window.isSecureContext) {
-        out.audio = out.orientation = 'insecure';
-        return out;
-      }
-      const gyroP = this._requestOrientation();
-      const audioP = this._startAudio();
-      const [g, a] = await Promise.all([gyroP, audioP]);
-      out.orientation = g;
-      out.audio = a;
-      this.audioOn = a === 'ok';
-      this.orientOn = g === 'ok';
-
-      if (this.orientOn) {
-        window.addEventListener('deviceorientation', this._onOrient);
-        // computadores disparam o evento sem valores: se nada útil chegar, avisa
-        this._gyroTimer = setTimeout(() => {
-          if (!this.orientSeen) {
-            this.orientOn = false;
-            window.removeEventListener('deviceorientation', this._onOrient);
-            if (onGyro) onGyro('unavailable');
-          } else if (onGyro) {
-            onGyro('ok');
-          }
-        }, 1500);
-      }
-      return out;
-    }
-
-    stop() {
-      clearTimeout(this._gyroTimer);
-      window.removeEventListener('deviceorientation', this._onOrient);
-      if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
-      if (this.ctx) { try { this.ctx.close(); } catch (e) { /* ignora */ } }
-      this._clearSession();
-    }
-
-    async _requestOrientation() {
-      if (!('DeviceOrientationEvent' in window)) return 'unsupported';
-      const D = window.DeviceOrientationEvent;
-      if (typeof D.requestPermission === 'function') {
-        try {
-          const r = await D.requestPermission();
-          return r === 'granted' ? 'ok' : 'denied';
-        } catch (e) {
-          return 'denied';
-        }
-      }
-      return 'ok';
-    }
-
-    async _startAudio() {
-      const md = navigator.mediaDevices;
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!md || !md.getUserMedia || !AC) return 'unsupported';
-      let ctx;
-      try { ctx = new AC(); } catch (e) { return 'unsupported'; }
-      try {
-        if (ctx.resume) ctx.resume().catch(() => {});
-        const stream = await md.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        });
-        if (ctx.state === 'suspended') await ctx.resume();
-        const src = ctx.createMediaStreamSource(stream);
-        const an = ctx.createAnalyser();
-        an.fftSize = 1024;
-        an.smoothingTimeConstant = 0.4;
-        src.connect(an); // sem ligar na saída: não há retorno de áudio
-        this.ctx = ctx;
-        this.stream = stream;
-        this.analyser = an;
-        this.freq = new Uint8Array(an.frequencyBinCount);
-        this.wave = new Uint8Array(an.fftSize);
-        return 'ok';
-      } catch (e) {
-        try { ctx.close(); } catch (_) { /* ignora */ }
-        return e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'denied' : 'error';
-      }
-    }
-
-    _angle() {
-      let a = 0;
-      if (window.screen.orientation && typeof window.screen.orientation.angle === 'number') a = window.screen.orientation.angle;
-      else if (typeof window.orientation === 'number') a = window.orientation;
-      return ((a % 360) + 360) % 360;
-    }
-
-    _onOrient(e) {
-      if (e.gamma == null || e.beta == null) return;
-      this.orientSeen = true;
-      const ang = this._angle();
-      let ax = e.gamma;
-      let ay = e.beta;
-      if (ang === 90) { ax = e.beta; ay = -e.gamma; }
-      else if (ang === 270) { ax = -e.beta; ay = e.gamma; }
-      else if (ang === 180) { ax = -e.gamma; ay = -e.beta; }
-      // a posição em que o aparelho está ao ativar vira o centro
-      if (this.base === null || this.baseAng !== ang) {
-        this.base = { x: ax, y: ay };
-        this.baseAng = ang;
-      }
-      this.tgt.x = clamp((ax - this.base.x) / 40, -1, 1);
-      this.tgt.y = clamp((ay - this.base.y) / 40, -1, 1);
-    }
-
-    _band(lo, hi, hz) {
-      const a = Math.max(1, Math.floor(lo / hz));
-      const b = Math.min(this.freq.length - 1, Math.ceil(hi / hz));
-      let s = 0;
-      for (let i = a; i <= b; i++) s += this.freq[i];
-      const avg = s / ((b - a + 1) * 255);
-      return clamp((avg - 0.10) / 0.5, 0, 1);
-    }
-
-    update(dt) {
-      let L = 0, B = 0, M = 0, T = 0;
-      if (this.audioOn && this.analyser) {
-        const an = this.analyser;
-        an.getByteFrequencyData(this.freq);
-        an.getByteTimeDomainData(this.wave);
-        let s = 0;
-        for (let i = 0; i < this.wave.length; i++) {
-          const v = (this.wave[i] - 128) / 128;
-          s += v * v;
-        }
-        L = clamp(Math.sqrt(s / this.wave.length) * 5, 0, 1);
-        const hz = this.ctx.sampleRate / an.fftSize;
-        B = this._band(20, 250, hz);
-        M = this._band(250, 2000, hz);
-        T = this._band(2000, 9000, hz);
-      }
-      const ease = (cur, target) => cur + (target - cur) * (1 - Math.exp(-dt * (target > cur ? 28 : 4)));
-      this.sm.level = ease(this.sm.level, L);
-      this.sm.bass = ease(this.sm.bass, B);
-      this.sm.mid = ease(this.sm.mid, M);
-      this.sm.treble = ease(this.sm.treble, T);
-
-      // batida: os graves saltam acima da média recente
-      this.bassAvg += (B - this.bassAvg) * (1 - Math.exp(-dt * 1.2));
-      if (B - this.bassAvg > 0.16 && this.pulse < 0.35) this.pulse = 1;
-      this.pulse *= Math.exp(-dt * 4.5);
-
-      const k = 1 - Math.exp(-dt * 9);
-      this.tilt.x += (this.tgt.x - this.tilt.x) * k;
-      this.tilt.y += (this.tgt.y - this.tilt.y) * k;
-    }
-
-    /* Valores prontos para o shader, já com a sensibilidade aplicada. */
-    read() {
-      const g = this.audioSens;
-      const c = (v) => clamp(v * g, 0, 1.6);
-      return {
-        level: c(this.sm.level),
-        bass: c(this.sm.bass),
-        mid: c(this.sm.mid),
-        treble: c(this.sm.treble),
-        pulse: clamp(this.pulse * g, 0, 1.5),
-        tiltX: clamp(this.tilt.x * this.orientSens, -2, 2),
-        tiltY: clamp(this.tilt.y * this.orientSens, -2, 2),
-      };
+  async function startAudio() {
+    if (active) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      const bufferLength = analyser.frequencyBinCount;
+      dataArray = new Uint8Array(bufferLength);
+      source.connect(analyser);
+      active = true;
+      setStatus('Microfone ativo.', 'ok');
+      paintButton();
+      loop();
+    } catch (err) {
+      console.error('erro audio', err);
+      setStatus('Microfone não disponível.', 'warn');
+      active = false;
+      paintButton();
     }
   }
 
-  window.V1Interaction = V1Interaction;
+  function stopAudio() {
+    active = false;
+    if (raf) cancelAnimationFrame(raf);
+    if (source) try { source.disconnect(); } catch (e) {}
+    if (analyser) try { analyser.disconnect(); } catch (e) {}
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+    if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
+    audioCtx = analyser = source = null;
+    setStatus('');
+    paintButton();
+  }
+
+  // tilt / gyroscope / pointer
+  let lastTilt = [0,0];
+  function onDevice(e) {
+    if (!e) return;
+    // use gamma (left/right) and beta (front/back)
+    const gx = (e.gamma || 0) / 90; // -1..1
+    const gy = (e.beta || 0) / 90;  // -1..1
+    const sens = parseFloat(orientSens ? orientSens.value : 1.0);
+    lastTilt = [gx * sens, gy * sens];
+    if (window.s0leVjShaders && typeof window.s0leVjShaders.setAudio === 'function') {
+      window.s0leVjShaders.setAudio({ tilt: lastTilt });
+    }
+  }
+
+  function onPointer(e) {
+    const x = (e.clientX / window.innerWidth) * 2 - 1;
+    const y = -((e.clientY / window.innerHeight) * 2 - 1);
+    const sens = parseFloat(orientSens ? orientSens.value : 1.0);
+    lastTilt = [x * sens, y * sens];
+    if (window.s0leVjShaders && typeof window.s0leVjShaders.setAudio === 'function') {
+      window.s0leVjShaders.setAudio({ tilt: lastTilt });
+    }
+  }
+
+  // bind UI
+  if (toggle) {
+    toggle.addEventListener('click', async () => {
+      if (active) { stopAudio(); return; }
+      // request device orientation permission on iOS when needed
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          const resp = await DeviceOrientationEvent.requestPermission();
+          if (resp !== 'granted') setStatus('Permissão de movimento não concedida.', 'warn');
+        } catch (e) { /* ignore */ }
+      }
+      startAudio();
+    });
+  }
+  if (audioSens) {
+    audioSens.addEventListener('input', () => { if (audioVal) audioVal.textContent = parseFloat(audioSens.value).toFixed(2); });
+    audioSens.dispatchEvent(new Event('input'));
+  }
+  if (orientSens) {
+    orientSens.addEventListener('input', () => { if (orientVal) orientVal.textContent = parseFloat(orientSens.value).toFixed(2); });
+    orientSens.dispatchEvent(new Event('input'));
+  }
+  // device orientation and pointer fallback
+  window.addEventListener('deviceorientation', onDevice);
+  window.addEventListener('pointermove', onPointer);
+  window.addEventListener('pointerdown', onPointer);
+
+  // expose small API
+  window.s0leVjInteraction = {
+    start: startAudio,
+    stop: stopAudio,
+    isActive: () => active
+  };
 })();
