@@ -166,37 +166,27 @@ float hash21(vec2 p) {
 
 void main() {
   vec2 uv = v_uv;
-  float t = u_time * 0.5;
+  float t = u_time * 0.3;
 
-  // deformação via giroscópio com mais movimento
-  uv += u_tilt * 0.08 * sin(uv.y * 4.0 + t);
-  uv += u_audio * 0.05 * cos(uv.x * 5.0 - t * 1.5);
-
-  // gradiente radial + ondas
-  vec2 center = vec2(0.5) + u_tilt * 0.15;
+  // BACKGROUND MÁS OSCURO para que la flor brille
+  vec2 center = vec2(0.5);
   float r = length(uv - center);
-  float wave = sin(r * 12.0 - t * 3.0) * 0.5 + 0.5;
 
-  // cores base: roxo escuro → ciano vibrante
-  vec3 darkPurple = vec3(0.15, 0.05, 0.25);
-  vec3 brightCyan = vec3(0.2, 1.0, 0.8);
+  // gradiente: negro profundo → azul oscuro
+  vec3 col = mix(
+    vec3(0.02, 0.02, 0.05),     // muy oscuro
+    vec3(0.08, 0.05, 0.15),     // azul oscuro
+    smoothstep(0.0, 1.0, r)
+  );
 
-  vec3 col = mix(darkPurple, brightCyan, wave * (0.6 + 0.8 * u_audio));
+  // pulso sutil de fondo
+  col += vec3(0.05, 0.02, 0.08) * (0.3 + 0.2 * sin(t * 0.5));
 
-  // ondulação extra com som
-  col += vec3(0.3, 0.5, 1.0) * sin(t * 1.5 + r * 8.0) * u_audio * 0.3;
+  // pequeñas ondas muy sutiles
+  col += vec3(0.1, 0.05, 0.15) * sin(r * 5.0 - t) * 0.1 * u_audio;
 
-  // brilho focal com áudio
-  col += vec3(1.0, 0.3, 0.8) * exp(-r * 3.0) * (0.4 + 0.6 * u_audio);
-
-  // respiração suave
-  col *= 0.85 + 0.15 * sin(t * 0.8);
-
-  // ruído sutil
-  col += (hash21(uv + t) - 0.5) * 0.03;
-
-  // saturação com som
-  col *= 1.0 + u_audio * 0.2;
+  // ruido muy bajo
+  col += (hash21(uv + t * 0.1) - 0.5) * 0.01;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -226,61 +216,62 @@ void main() {
   ];
 
   // ========== GEOMETRIA DA FLOR ==========
-  function makeFlower(layers = 8) {
+  function makeFlower(layers = 6) {
     const verts = [];
     const colors = [];
 
-    // pétalas: camadas concêntricas
+    // pétalas: camadas simples, FÁCIL de ver
     for (let layer = 0; layer < layers; layer++) {
       const ratio = (layer + 1) / layers;
-      const radius = 0.3 + ratio * 0.8;
-      const height = Math.sin(ratio * Math.PI) * 0.5;
-      const segments = Math.ceil(8 + layer * 2);
+      const radius = 0.2 + ratio * 1.2;  // mais grande
+      const height = Math.sin(ratio * Math.PI) * 0.3;
+      const segments = 20 + layer * 3;  // mais pontos
 
       for (let i = 0; i < segments; i++) {
         const angle = (i / segments) * Math.PI * 2;
         const x = Math.cos(angle) * radius;
         const z = Math.sin(angle) * radius;
-        const y = height;
+        const y = height - 0.3;  // mais abaixo
 
         verts.push(x, y, z);
 
-        // cor: azul escuro → azul ciano (gradiente por layer)
-        const blue = 0.3 + ratio * 0.5;
-        const cyan = 0.2 + ratio * 0.7;
-        colors.push(0.1, blue, cyan);
+        // cor VERMELHA: gradiente vermelho escuro → vermelho brilhante
+        const red = 0.8 + ratio * 0.2;    // 0.8 a 1.0
+        const green = 0.05 * ratio;        // 0.0 a 0.05
+        const blue = 0.05 * ratio;         // 0.0 a 0.05
+        colors.push(red, green, blue);
       }
     }
 
-    // miolo (esfera densa, laranja/dourado)
-    const coreSegments = 12;
-    const coreLayers = 6;
+    // miolo (esfera, VERMELHO INTENSO)
+    const coreSegments = 16;
+    const coreLayers = 8;
     for (let lat = 0; lat < coreLayers; lat++) {
       const theta = (lat / coreLayers) * Math.PI;
       const sinTheta = Math.sin(theta);
-      const y = Math.cos(theta) * 0.15;
+      const y = Math.cos(theta) * 0.2 - 0.3;
 
       for (let lon = 0; lon < coreSegments; lon++) {
         const phi = (lon / coreSegments) * Math.PI * 2;
-        const x = Math.sin(phi) * sinTheta * 0.15;
-        const z = Math.cos(phi) * sinTheta * 0.15;
+        const x = Math.sin(phi) * sinTheta * 0.2;
+        const z = Math.cos(phi) * sinTheta * 0.2;
 
         verts.push(x, y, z);
-        colors.push(1.0, 0.6, 0.1); // laranja
+        colors.push(1.0, 0.2, 0.0); // rojo naranja intenso
       }
     }
 
-    // gotas de água: pontos esparsos brilhantes
-    const dropCount = 20;
+    // gotas de agua: puntos brillantes BLANCOS
+    const dropCount = 30;
     for (let i = 0; i < dropCount; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const radius = 0.5 + Math.random() * 0.6;
-      const height = (Math.random() - 0.5) * 0.8;
+      const radius = 0.4 + Math.random() * 0.8;
+      const height = (Math.random() - 0.5) * 0.6 - 0.3;
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
 
       verts.push(x, height, z);
-      colors.push(0.7, 0.9, 1.0); // azul claro (luz)
+      colors.push(1.0, 1.0, 0.9); // blanco brillante
     }
 
     return { verts: new Float32Array(verts), colors: new Float32Array(colors), count: verts.length / 3 };
@@ -510,44 +501,44 @@ void main() {
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-    // --- DODECAEDRO ---
-    gl.useProgram(progDodeca);
+    // --- DODECAEDRO (TEMPORALMENTE DESACTIVADO PARA ENFOQUE EN FLOR) ---
+    // gl.useProgram(progDodeca);
 
     // matrizes
     const aspect = canvas.width / canvas.height;
     const proj = perspective(45, aspect, 0.1, 100);
     const view = lookAt([0,0,3.5], [0,0,0], [0,1,0]);
-    const model = identity();
-    // rotação via giroscópio
-    rotateY(model, state.tiltX * Math.PI);
-    rotateX(model, state.tiltY * Math.PI);
-    // rotação autônoma
-    rotateZ(model, time * 0.3 + state.audio * 1.5);
-    // escala com áudio
-    const scale = 1.0 + state.audio * 0.3;
-    m4mult(model, [scale,0,0,0, 0,scale,0,0, 0,0,scale,0, 0,0,0,1]);
+    // const model = identity();
+    // // rotação via giroscópio
+    // rotateY(model, state.tiltX * Math.PI);
+    // rotateX(model, state.tiltY * Math.PI);
+    // // rotação autônoma
+    // rotateZ(model, time * 0.3 + state.audio * 1.5);
+    // // escala com áudio
+    // const scale = 1.0 + state.audio * 0.3;
+    // m4mult(model, [scale,0,0,0, 0,scale,0,0, 0,0,scale,0, 0,0,0,1]);
 
-    const normalMat = transpose(inverse(model));
+    // const normalMat = transpose(inverse(model));
 
-    gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_proj'), false, proj);
-    gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_view'), false, view);
-    gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_model'), false, model);
-    gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_normalMat'), false, normalMat);
+    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_proj'), false, proj);
+    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_view'), false, view);
+    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_model'), false, model);
+    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_normalMat'), false, normalMat);
 
-    gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_time'), time);
-    gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_audio'), state.audio);
-    gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_bass'), state.bass);
-    gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_mid'), state.mid);
-    gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_treble'), state.treble);
-    gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_pulse'), state.pulse);
-    gl.uniform1i(gl.getUniformLocation(progDodeca, 'u_wireframe'), wireframe ? 1 : 0);
+    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_time'), time);
+    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_audio'), state.audio);
+    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_bass'), state.bass);
+    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_mid'), state.mid);
+    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_treble'), state.treble);
+    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_pulse'), state.pulse);
+    // gl.uniform1i(gl.getUniformLocation(progDodeca, 'u_wireframe'), wireframe ? 1 : 0);
 
-    // bind VAO e draw
-    const ext = gl.getExtension('OES_vertex_array_object');
-    if (ext && vao) ext.bindVertexArrayOES(vao);
+    // // bind VAO e draw
+    // const ext = gl.getExtension('OES_vertex_array_object');
+    // if (ext && vao) ext.bindVertexArrayOES(vao);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
-    gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
+    // gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
+    // gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
 
     // --- FLOR ---
     if (progFlower && flower) {
