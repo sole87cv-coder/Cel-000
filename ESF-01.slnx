@@ -1,0 +1,27 @@
+<Solution>
+  <Folder Name="/Site/">
+    <File Path=".gitattributes" />
+    <File Path=".gitignore" />
+    <File Path=".nojekyll" />
+    <File Path="icon.svg" />
+    <File Path="index.html" />
+    <File Path="manifest.webmanifest" />
+    <File Path="privacy.html" />
+    <File Path="service-worker.js" />
+    <Folder Name="/Site/assets/">
+      <File Path="assets/app.js" />
+      <File Path="assets/interaction.js" />
+      <File Path="assets/shaders.js" />
+      <File Path="assets/styles.css" />
+    </Folder>
+    <Folder Name="/Site/icons/">
+      <File Path="icons/icon-192.png" />
+      <File Path="icons/icon-512.png" />
+      <File Path="icons/icon-maskable-512.png" />
+    </Folder>
+  </Folder>
+  <Folder Name="/Documentação/">
+    <File Path="README.md" />
+    <File Path="TESTES.md" />
+  </Folder>
+</Solution>
