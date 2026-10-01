@@ -1,6 +1,6 @@
-/* v1su4rt — renderizador WebGL 3D com dodecaedro interativo.
-   Microfone: escala, wireframe↔sólido, cores.
-   Giroscópio: rotação em tempo real.
+/* v1su4rt — renderizador WebGL 3D com dodecaedro + flor dália.
+   Dodecaedro: reativo ao giroscópio e microfone.
+   Flor: malha de vértices 3D azul, reativa apenas ao microfone.
    Background: deformação via áudio e tilt. */
 (function () {
   'use strict';
@@ -66,6 +66,58 @@ void main() {
 
   // se wireframe, reduz saturação
   if (u_wireframe) col *= 0.6;
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+  // ========== SHADERS DA FLOR ==========
+  const VERTEX_FLOWER = `
+precision mediump float;
+
+attribute vec3 a_pos;
+attribute vec3 a_color;
+
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform mat4 u_model;
+
+varying vec3 v_pos;
+varying vec3 v_color;
+
+void main() {
+  vec4 worldPos = u_model * vec4(a_pos, 1.0);
+  v_pos = worldPos.xyz;
+  v_color = a_color;
+  gl_Position = u_proj * u_view * worldPos;
+  gl_PointSize = 3.0;
+}
+`;
+
+  const FRAGMENT_FLOWER = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+uniform float u_time;
+uniform float u_audio;
+uniform float u_bass;
+uniform float u_treble;
+
+varying vec3 v_pos;
+varying vec3 v_color;
+
+void main() {
+  vec3 col = v_color;
+
+  // glow nos vértices com treble
+  float glow = 0.3 + u_treble * 0.7;
+  col += vec3(0.5, 0.5, 0.5) * glow * 0.3;
+
+  // brilho com som
+  col *= 0.8 + 0.2 * u_audio;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -157,6 +209,67 @@ void main() {
     [16,17,5,4,18], [16,6,12,10,4],
   ];
 
+  // ========== GEOMETRIA DA FLOR ==========
+  function makeFlower(layers = 8) {
+    const verts = [];
+    const colors = [];
+
+    // pétalas: camadas concêntricas
+    for (let layer = 0; layer < layers; layer++) {
+      const ratio = (layer + 1) / layers;
+      const radius = 0.3 + ratio * 0.8;
+      const height = Math.sin(ratio * Math.PI) * 0.5;
+      const segments = Math.ceil(8 + layer * 2);
+
+      for (let i = 0; i < segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+        const y = height;
+
+        verts.push(x, y, z);
+
+        // cor: azul escuro → azul ciano (gradiente por layer)
+        const blue = 0.3 + ratio * 0.5;
+        const cyan = 0.2 + ratio * 0.7;
+        colors.push(0.1, blue, cyan);
+      }
+    }
+
+    // miolo (esfera densa, laranja/dourado)
+    const coreSegments = 12;
+    const coreLayers = 6;
+    for (let lat = 0; lat < coreLayers; lat++) {
+      const theta = (lat / coreLayers) * Math.PI;
+      const sinTheta = Math.sin(theta);
+      const y = Math.cos(theta) * 0.15;
+
+      for (let lon = 0; lon < coreSegments; lon++) {
+        const phi = (lon / coreSegments) * Math.PI * 2;
+        const x = Math.sin(phi) * sinTheta * 0.15;
+        const z = Math.cos(phi) * sinTheta * 0.15;
+
+        verts.push(x, y, z);
+        colors.push(1.0, 0.6, 0.1); // laranja
+      }
+    }
+
+    // gotas de água: pontos esparsos brilhantes
+    const dropCount = 20;
+    for (let i = 0; i < dropCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 0.5 + Math.random() * 0.6;
+      const height = (Math.random() - 0.5) * 0.8;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+
+      verts.push(x, height, z);
+      colors.push(0.7, 0.9, 1.0); // azul claro (luz)
+    }
+
+    return { verts: new Float32Array(verts), colors: new Float32Array(colors), count: verts.length / 3 };
+  }
+
   function makeDodeca(scale = 0.7) {
     const verts = [];
     const norms = [];
@@ -219,6 +332,13 @@ void main() {
   let wireframe = false;
   let canvas = null;
   let rendererMode = 'webgl'; // ou '2d' se fallback
+
+  // variáveis da flor
+  let progFlower = null;
+  let flower = null;
+  let flowerVerts = null;
+  let flowerColors = null;
+  let flowerRotation = 0;
 
   function compileShader(type, src) {
     const s = gl.createShader(type);
@@ -318,6 +438,25 @@ void main() {
 
     if (ext) ext.bindVertexArrayOES(null);
 
+    // --- INICIALIZAR FLOR ---
+    const vsFlower = compileShader(gl.VERTEX_SHADER, VERTEX_FLOWER);
+    const fsFlower = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_FLOWER);
+    if (vsFlower && fsFlower) {
+      progFlower = linkProgram(vsFlower, fsFlower);
+      if (progFlower) {
+        flower = makeFlower(8); // 8 camadas de pétalas
+
+        // buffers da flor
+        flowerVerts = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, flowerVerts);
+        gl.bufferData(gl.ARRAY_BUFFER, flower.verts, gl.STATIC_DRAW);
+
+        flowerColors = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, flowerColors);
+        gl.bufferData(gl.ARRAY_BUFFER, flower.colors, gl.STATIC_DRAW);
+      }
+    }
+
     return true;
   }
 
@@ -391,9 +530,49 @@ void main() {
     const ext = gl.getExtension('OES_vertex_array_object');
     if (ext && vao) ext.bindVertexArrayOES(vao);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
-    gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
-  }
+       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
+      gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
+
+      // --- FLOR ---
+      if (progFlower && flower) {
+        gl.useProgram(progFlower);
+
+        // modelo da flor: só com áudio, SEM giroscópio
+        const modelFlower = identity();
+        // rotação lenta + aceleração com áudio
+        flowerRotation += dt * (0.2 + state.audio * 0.8);
+        rotateY(modelFlower, flowerRotation);
+        // escala com áudio
+        const scaleFlower = 0.9 + state.audio * 0.5;
+        m4mult(modelFlower, [scaleFlower,0,0,0, 0,scaleFlower,0,0, 0,0,scaleFlower,0, 0,0,0,1]);
+
+        gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_proj'), false, proj);
+        gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_view'), false, view);
+        gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_model'), false, modelFlower);
+
+        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_time'), time);
+        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_audio'), state.audio);
+        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_bass'), state.bass);
+        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_treble'), state.treble);
+
+        // bind e draw
+        if (flowerVerts) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, flowerVerts);
+          const posLocFlower = gl.getAttribLocation(progFlower, 'a_pos');
+          gl.enableVertexAttribArray(posLocFlower);
+          gl.vertexAttribPointer(posLocFlower, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        if (flowerColors) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, flowerColors);
+          const colorLocFlower = gl.getAttribLocation(progFlower, 'a_color');
+          gl.enableVertexAttribArray(colorLocFlower);
+          gl.vertexAttribPointer(colorLocFlower, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        gl.drawArrays(gl.POINTS, 0, flower.count);
+      }
+    }
 
   // ========== MATH ==========
   function identity() { return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
