@@ -51,21 +51,26 @@ varying vec3 v_norm;
 varying vec3 v_color;
 
 void main() {
-  // gradiente + reflexão
   vec3 light = normalize(vec3(1.0, 1.0, 1.0));
-  float diff = max(0.3, dot(v_norm, light));
+  float diff = max(0.2, dot(v_norm, light));
 
-  // cor base + áudio
-  vec3 col = v_color * (0.7 + 0.3 * (1.0 + u_audio) * diff);
+  // cor base muito mais brilhante
+  vec3 col = v_color * (0.9 + 0.5 * u_audio);
 
-  // agudos acendem pontos
-  col += vec3(0.9, 0.3, 1.0) * u_treble * 0.5;
+  // reflexão especular intensa
+  col += diff * vec3(1.0, 1.0, 1.0) * 0.6;
 
-  // brilho pulsante com graves
-  col += vec3(0.2, 1.0, 0.2) * u_bass * u_pulse * 0.4;
+  // agudos acendem pontos (roxo/magenta)
+  col += vec3(1.0, 0.2, 1.0) * u_treble * 0.8;
 
-  // se wireframe, reduz saturação
-  if (u_wireframe) col *= 0.6;
+  // brilho pulsante com graves (verde)
+  col += vec3(0.3, 1.0, 0.3) * u_bass * (0.5 + u_pulse * 0.5) * 0.6;
+
+  // ondulação com áudio
+  col *= 1.0 + sin(u_time + v_pos.x * 5.0) * u_mid * 0.3;
+
+  // se wireframe, mais opaco
+  if (u_wireframe) col *= 0.9;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -112,12 +117,15 @@ varying vec3 v_color;
 void main() {
   vec3 col = v_color;
 
-  // glow nos vértices com treble
-  float glow = 0.3 + u_treble * 0.7;
-  col += vec3(0.5, 0.5, 0.5) * glow * 0.3;
+  // glow nos vértices muito mais pronunciado
+  float glow = 0.5 + u_treble * 1.2;
+  col += vec3(1.0, 0.8, 1.0) * glow * 0.6;
 
-  // brilho com som
-  col *= 0.8 + 0.2 * u_audio;
+  // brilho com som forte
+  col *= 1.0 + u_audio * 0.8;
+
+  // pulsação com bass
+  col += vec3(0.2, 0.8, 1.0) * u_bass * 0.5;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -160,27 +168,35 @@ void main() {
   vec2 uv = v_uv;
   float t = u_time * 0.5;
 
-  // deformação via giroscópio
-  uv += u_tilt * 0.05 * sin(uv.y * 3.0 + t);
-  uv += u_audio * 0.03 * cos(uv.x * 4.0 - t);
+  // deformação via giroscópio com mais movimento
+  uv += u_tilt * 0.08 * sin(uv.y * 4.0 + t);
+  uv += u_audio * 0.05 * cos(uv.x * 5.0 - t * 1.5);
 
   // gradiente radial + ondas
-  vec2 center = vec2(0.5) + u_tilt * 0.1;
+  vec2 center = vec2(0.5) + u_tilt * 0.15;
   float r = length(uv - center);
-  float wave = sin(r * 10.0 - t * 2.0) * 0.5 + 0.5;
+  float wave = sin(r * 12.0 - t * 3.0) * 0.5 + 0.5;
 
-  // cores: roxo/verde/azul conforme áudio
-  vec3 col = mix(
-    vec3(0.05, 0.02, 0.08),
-    vec3(0.2, 0.8, 0.4),
-    wave * (0.5 + 0.5 * u_audio)
-  );
+  // cores base: roxo escuro → ciano vibrante
+  vec3 darkPurple = vec3(0.15, 0.05, 0.25);
+  vec3 brightCyan = vec3(0.2, 1.0, 0.8);
 
-  // respiração
-  col *= 0.9 + 0.1 * sin(t * 0.8);
+  vec3 col = mix(darkPurple, brightCyan, wave * (0.6 + 0.8 * u_audio));
 
-  // ruído
-  col += (hash21(uv + t) - 0.5) * 0.02;
+  // ondulação extra com som
+  col += vec3(0.3, 0.5, 1.0) * sin(t * 1.5 + r * 8.0) * u_audio * 0.3;
+
+  // brilho focal com áudio
+  col += vec3(1.0, 0.3, 0.8) * exp(-r * 3.0) * (0.4 + 0.6 * u_audio);
+
+  // respiração suave
+  col *= 0.85 + 0.15 * sin(t * 0.8);
+
+  // ruído sutil
+  col += (hash21(uv + t) - 0.5) * 0.03;
+
+  // saturação com som
+  col *= 1.0 + u_audio * 0.2;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -305,8 +321,8 @@ void main() {
         let nlen = Math.sqrt(nx*nx + ny*ny + nz*nz);
         if (nlen > 0.001) { nx/=nlen; ny/=nlen; nz/=nlen; }
 
-        // cor alternada (roxo/verde)
-        const hue = (idx % 2) === 0 ? [0.8, 0.2, 1.0] : [0.2, 1.0, 0.4];
+        // cor alternada: roxo VIBRANTE + verde VIBRANTE
+        const hue = (idx % 2) === 0 ? [1.0, 0.1, 1.0] : [0.1, 1.0, 0.3];
 
         for (let vi of [a, b, c]) {
           indices.push(verts.length / 3);
@@ -401,7 +417,7 @@ void main() {
     if (!progDodeca) return false;
 
     // geometria
-    dodeca = makeDodeca(0.7);
+    dodeca = makeDodeca(1.0);
 
     // VAO (se suportado)
     const ext = gl.getExtension('OES_vertex_array_object');
@@ -500,7 +516,7 @@ void main() {
     // matrizes
     const aspect = canvas.width / canvas.height;
     const proj = perspective(45, aspect, 0.1, 100);
-    const view = lookAt([0,0,2.5], [0,0,0], [0,1,0]);
+    const view = lookAt([0,0,3.5], [0,0,0], [0,1,0]);
     const model = identity();
     // rotação via giroscópio
     rotateY(model, state.tiltX * Math.PI);
@@ -530,49 +546,49 @@ void main() {
     const ext = gl.getExtension('OES_vertex_array_object');
     if (ext && vao) ext.bindVertexArrayOES(vao);
 
-       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
-      gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
+    gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
 
-      // --- FLOR ---
-      if (progFlower && flower) {
-        gl.useProgram(progFlower);
+    // --- FLOR ---
+    if (progFlower && flower) {
+      gl.useProgram(progFlower);
 
-        // modelo da flor: só com áudio, SEM giroscópio
-        const modelFlower = identity();
-        // rotação lenta + aceleração com áudio
-        flowerRotation += dt * (0.2 + state.audio * 0.8);
-        rotateY(modelFlower, flowerRotation);
-        // escala com áudio
-        const scaleFlower = 0.9 + state.audio * 0.5;
-        m4mult(modelFlower, [scaleFlower,0,0,0, 0,scaleFlower,0,0, 0,0,scaleFlower,0, 0,0,0,1]);
+      // modelo da flor: só com áudio, SEM giroscópio
+      const modelFlower = identity();
+      // rotação lenta + aceleração com áudio
+      flowerRotation += dt * (0.2 + state.audio * 0.8);
+      rotateY(modelFlower, flowerRotation);
+      // escala com áudio
+      const scaleFlower = 0.9 + state.audio * 0.5;
+      m4mult(modelFlower, [scaleFlower,0,0,0, 0,scaleFlower,0,0, 0,0,scaleFlower,0, 0,0,0,1]);
 
-        gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_proj'), false, proj);
-        gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_view'), false, view);
-        gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_model'), false, modelFlower);
+      gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_proj'), false, proj);
+      gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_view'), false, view);
+      gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_model'), false, modelFlower);
 
-        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_time'), time);
-        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_audio'), state.audio);
-        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_bass'), state.bass);
-        gl.uniform1f(gl.getUniformLocation(progFlower, 'u_treble'), state.treble);
+      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_time'), time);
+      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_audio'), state.audio);
+      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_bass'), state.bass);
+      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_treble'), state.treble);
 
-        // bind e draw
-        if (flowerVerts) {
-          gl.bindBuffer(gl.ARRAY_BUFFER, flowerVerts);
-          const posLocFlower = gl.getAttribLocation(progFlower, 'a_pos');
-          gl.enableVertexAttribArray(posLocFlower);
-          gl.vertexAttribPointer(posLocFlower, 3, gl.FLOAT, false, 0, 0);
-        }
-
-        if (flowerColors) {
-          gl.bindBuffer(gl.ARRAY_BUFFER, flowerColors);
-          const colorLocFlower = gl.getAttribLocation(progFlower, 'a_color');
-          gl.enableVertexAttribArray(colorLocFlower);
-          gl.vertexAttribPointer(colorLocFlower, 3, gl.FLOAT, false, 0, 0);
-        }
-
-        gl.drawArrays(gl.POINTS, 0, flower.count);
+      // bind e draw
+      if (flowerVerts) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, flowerVerts);
+        const posLocFlower = gl.getAttribLocation(progFlower, 'a_pos');
+        gl.enableVertexAttribArray(posLocFlower);
+        gl.vertexAttribPointer(posLocFlower, 3, gl.FLOAT, false, 0, 0);
       }
+
+      if (flowerColors) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, flowerColors);
+        const colorLocFlower = gl.getAttribLocation(progFlower, 'a_color');
+        gl.enableVertexAttribArray(colorLocFlower);
+        gl.vertexAttribPointer(colorLocFlower, 3, gl.FLOAT, false, 0, 0);
+      }
+
+      gl.drawArrays(gl.POINTS, 0, flower.count);
     }
+  }
 
   // ========== MATH ==========
   function identity() { return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
