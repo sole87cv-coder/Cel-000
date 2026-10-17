@@ -19,6 +19,9 @@
       <File Path="icons/icon-512.png" />
       <File Path="icons/icon-maskable-512.png" />
     </Folder>
+    <Folder Name="/Site/scripts/">
+      <File Path="scripts/deploy.ps1" />
+    </Folder>
   </Folder>
   <Folder Name="/Documentação/">
     <File Path="README.md" />

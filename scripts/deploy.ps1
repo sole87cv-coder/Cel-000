@@ -3,7 +3,8 @@ param(
   [string]$Message = "Deploy PWA + shader interativo",
   [string]$Remote = "origin",
   [string]$Branch = "main",
-  [string]$RemoteUrl = ""
+  [string]$RemoteUrl = "",
+  [switch]$Force
 )
 
 Set-StrictMode -Version Latest
@@ -46,12 +47,27 @@ if ($RemoteUrl -ne "") {
   }
 }
 
-# stage, commit and push
-git add .
+# avisa antes de stagear: git add -A apanha tudo o que estiver na pasta
+$untracked = git ls-files --others --exclude-standard
+$nested = Get-ChildItem -Path . -Directory -Recurse -Force -Filter ".git" -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -ne (Join-Path (Get-Location) ".git") }
+if ($nested) {
+  Write-Warning "Repositórios aninhados detectados (não deviam estar aqui):"
+  $nested | ForEach-Object { Write-Warning "  $($_.Parent.FullName)" }
+}
+
+Write-Host "Alterações a enviar:"
+git status --short
+if (-not $Force) {
+  $answer = Read-Host "Confirma commit e push para $Remote/$Branch? [s/N]"
+  if ($answer -notmatch '^[sSyY]') { Write-Host "Cancelado."; Pop-Location; exit 0 }
+}
+
+git add -A
 if ($LASTEXITCODE -ne 0) { Write-Error "git add falhou"; Pop-Location; exit 1 }
 
-git commit -m "$Message" 2>$null
-if ($LASTEXITCODE -ne 0) { Write-Host "Nenhuma alteração para commitar ou commit falhou (verifique)." }
+git commit -m "$Message"
+if ($LASTEXITCODE -ne 0) { Write-Host "Nada para commitar (working tree limpo) — a ignorar." }
 
 git push $Remote $Branch
 if ($LASTEXITCODE -ne 0) { Write-Error "git push falhou. Verifique credenciais e se a branch existe."; Pop-Location; exit 1 }

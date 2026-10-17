@@ -1,6 +1,6 @@
 // service-worker.js — cache offline do v1su4rt.
 // Ao alterar qualquer arquivo em APP_FILES, aumente CACHE_NAME.
-const CACHE_NAME = 'v1su4rt-v5';
+const CACHE_NAME = 'v1su4rt-v10';
 const APP_FILES = [
   './',
   './index.html',
@@ -39,6 +39,10 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
 
+  // recarregamentos forçados (Ctrl+Shift+R, "disable cache") têm de chegar à rede,
+  // senão o cache-first esconde a versão nova dos ficheiros
+  if (request.cache === 'reload' || request.cache === 'no-store') return;
+
   // páginas: tenta a rede e atualiza o cache; offline, usa o que estiver guardado
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
@@ -63,10 +67,10 @@ self.addEventListener('fetch', (event) => {
       return fetch(request).then((response) => {
         if (response.ok) {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => {});
         }
         return response;
       });
-    }),
+    }).catch(() => Response.error()),
   );
 });

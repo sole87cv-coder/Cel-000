@@ -10,8 +10,10 @@
   const collapseBtn = $('panel-collapse');
   const audioRange = $('audio-sens');
   const orientRange = $('orient-sens');
+  const cloudRange = $('cloud-intens');
   const audioOut = $('audio-sens-value');
   const orientOut = $('orient-sens-value');
+  const cloudOut = $('cloud-intens-value');
 
   const sensors = new window.V1Interaction();
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -36,7 +38,7 @@
     if (a === 'ok' && g === 'ok') return ['Ativo. Fale, toque música ou incline o aparelho.', 'ok'];
     if (a === 'ok') {
       if (g === 'denied') return ['Microfone ativo. Movimento negado: recarregue a página e permita ao ativar.', 'warn'];
-      return ['Microfone ativo. Sem giroscópio neste aparelho: mova o mouse ou arraste na tela.', 'ok'];
+      return ['Microfone ativo. Sem giroscópio neste aparelho: mova o rato ou arraste no ecrã.', 'ok'];
     }
     if (a === 'denied') return ['Microfone bloqueado. Libere nas permissões do site e ative de novo.', 'warn'];
     if (a === 'unsupported') return ['Este navegador não dá acesso ao microfone.' + (g === 'ok' ? ' O giroscópio segue ativo.' : ''), 'warn'];
@@ -83,6 +85,9 @@
   }
   bindRange(audioRange, audioOut, (v) => { sensors.audioSens = v; });
   bindRange(orientRange, orientOut, (v) => { sensors.orientSens = v; });
+  bindRange(cloudRange, cloudOut, (v) => {
+    if (window.v1su4rtShaders) window.v1su4rtShaders.setCloudIntensity(v);
+  });
 
   collapseBtn.addEventListener('click', () => {
     const collapsed = panel.classList.toggle('is-collapsed');
@@ -90,56 +95,66 @@
     collapseBtn.setAttribute('aria-label', collapsed ? 'Mostrar controles' : 'Recolher controles');
   });
 
-  /* ---------- ponteiro (mouse, toque): alternativa quando não há sensores ---------- */
+  /* ---------- ponteiro (rato, toque): substitui o giroscópio quando não existe ---------- */
 
   const pointer = { x: 0, y: 0 };
-  const pointerT = { x: 0, y: 0 };
+  const pointerTarget = { x: 0, y: 0 };
+
   function movePointer(e) {
-    pointerT.x = (e.clientX / window.innerWidth) * 2 - 1;
-    pointerT.y = -((e.clientY / window.innerHeight) * 2 - 1);
+    pointerTarget.x = (e.clientX / window.innerWidth) * 2 - 1;
+    pointerTarget.y = -((e.clientY / window.innerHeight) * 2 - 1);
   }
   canvas.addEventListener('pointermove', movePointer);
   canvas.addEventListener('pointerdown', movePointer);
-  const release = (e) => { if (e.pointerType !== 'mouse') { pointerT.x = 0; pointerT.y = 0; } };
+  const release = (e) => { if (e.pointerType !== 'mouse') { pointerTarget.x = 0; pointerTarget.y = 0; } };
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
 
-  /* ---------- RENDERIZADOR (delegado a shaders.js) ---------- */
+  /* ---------- renderizador (delegado a shaders.js) ---------- */
 
-  // inicializa o renderizador 3D dodecaedro
-  if (window.v1su4rtShaders) {
-    window.v1su4rtShaders.init('stage');
-  } else {
-    console.error('[v1su4rt] shaders.js não carregado');
-    document.documentElement.classList.add('no-webgl');
-    setStatus('[v1su4rt] Erro: WebGL indisponível.', 'warn');
-  }
-
-  // loop de atualização de áudio/sensores → shader
-  let lastUpdateFrame = 0;
-  function updateSensorsLoop() {
-    const now = performance.now();
-    const dt = Math.min(0.1, Math.max(0.001, (now - lastUpdateFrame) / 1000)) || 0.016;
-    lastUpdateFrame = now;
-
+  function readFrame(dt) {
     sensors.update(dt);
     const s = sensors.read();
 
-    // enviar dados para o renderer
-    if (window.v1su4rtShaders) {
-      window.v1su4rtShaders.setAudio({
-        audio: s.level,
-        bass: s.bass,
-        mid: s.mid,
-        treble: s.treble,
-        pulse: s.pulse,
-        tilt: [s.tiltX, s.tiltY]
-      });
+    let tiltX = s.tiltX;
+    let tiltY = s.tiltY;
+    if (!sensors.orientOn) {
+      const k = 1 - Math.exp(-dt * 6);
+      pointer.x += (pointerTarget.x - pointer.x) * k;
+      pointer.y += (pointerTarget.y - pointer.y) * k;
+      tiltX = pointer.x * sensors.orientSens;
+      tiltY = pointer.y * sensors.orientSens;
     }
 
-    requestAnimationFrame(updateSensorsLoop);
+    return {
+      audio: s.level,
+      bass: s.bass,
+      mid: s.mid,
+      treble: s.treble,
+      pulse: s.pulse,
+      tilt: [tiltX, tiltY]
+    };
   }
-  updateSensorsLoop();
+
+  function applyMotionPreference() {
+    window.v1su4rtShaders.setTimeScale(reduceMotion.matches ? 0.35 : 1);
+  }
+
+  if (!window.v1su4rtShaders) {
+    console.error('[v1su4rt] shaders.js não carregado');
+    document.documentElement.classList.add('no-webgl');
+    setStatus('[v1su4rt] Erro: shaders indisponíveis.', 'warn');
+    return;
+  }
+
+  if (window.v1su4rtShaders.init('stage', readFrame)) {
+    applyMotionPreference();
+    if (reduceMotion.addEventListener) reduceMotion.addEventListener('change', applyMotionPreference);
+  } else {
+    console.error('[v1su4rt] WebGL indisponível');
+    document.documentElement.classList.add('no-webgl');
+    setStatus('Este navegador não tem WebGL disponível, por isso o visual não pode ser desenhado.', 'warn');
+  }
 
   /* ---------- instalação e offline ---------- */
 

@@ -1,135 +1,14 @@
-/* v1su4rt — renderizador WebGL 3D com dodecaedro + flor dália.
-   Dodecaedro: reativo ao giroscópio e microfone.
-   Flor: malha de vértices 3D azul, reativa apenas ao microfone.
-   Background: deformação via áudio e tilt. */
+/* v1su4rt — renderizador WebGL: fundo animado + flor em malha 3D.
+   Fundo: gradiente radial deslocado pela inclinação, ondas com graves, cor com médios.
+   Flor: pétalas em voltas, miolo, filetes, sépalas, caule e folhas; luz, transparência
+         e névoa de profundidade. O som abre a flor por raio: borda=graves, centro=agudos. */
 (function () {
   'use strict';
 
-  // ========== SHADERS ==========
-  const VERTEX_3D = `
-precision mediump float;
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const c01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-attribute vec3 a_pos;
-attribute vec3 a_norm;
-attribute vec3 a_color;
-
-uniform mat4 u_proj;
-uniform mat4 u_view;
-uniform mat4 u_model;
-uniform mat4 u_normalMat;
-
-varying vec3 v_pos;
-varying vec3 v_norm;
-varying vec3 v_color;
-
-void main() {
-  vec4 worldPos = u_model * vec4(a_pos, 1.0);
-  v_pos = worldPos.xyz;
-  v_norm = normalize((u_normalMat * vec4(a_norm, 0.0)).xyz);
-  v_color = a_color;
-  gl_Position = u_proj * u_view * worldPos;
-}
-`;
-
-  const FRAGMENT_3D = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-
-uniform float u_time;
-uniform float u_audio;    // volume geral 0..1.6
-uniform float u_bass;     // graves 0..1.6
-uniform float u_mid;      // médios 0..1.6
-uniform float u_treble;   // agudos 0..1.6
-uniform float u_pulse;    // batida
-uniform bool u_wireframe; // wireframe ou sólido
-
-varying vec3 v_pos;
-varying vec3 v_norm;
-varying vec3 v_color;
-
-void main() {
-  vec3 light = normalize(vec3(1.0, 1.0, 1.0));
-  float diff = max(0.2, dot(v_norm, light));
-
-  // cor base muito mais brilhante
-  vec3 col = v_color * (0.9 + 0.5 * u_audio);
-
-  // reflexão especular intensa
-  col += diff * vec3(1.0, 1.0, 1.0) * 0.6;
-
-  // agudos acendem pontos (roxo/magenta)
-  col += vec3(1.0, 0.2, 1.0) * u_treble * 0.8;
-
-  // brilho pulsante com graves (verde)
-  col += vec3(0.3, 1.0, 0.3) * u_bass * (0.5 + u_pulse * 0.5) * 0.6;
-
-  // ondulação com áudio
-  col *= 1.0 + sin(u_time + v_pos.x * 5.0) * u_mid * 0.3;
-
-  // se wireframe, mais opaco
-  if (u_wireframe) col *= 0.9;
-
-  gl_FragColor = vec4(col, 1.0);
-}
-`;
-
-  // ========== SHADERS DA FLOR ==========
-  const VERTEX_FLOWER = `
-precision mediump float;
-
-attribute vec3 a_pos;
-attribute vec3 a_color;
-
-uniform mat4 u_proj;
-uniform mat4 u_view;
-uniform mat4 u_model;
-
-varying vec3 v_pos;
-varying vec3 v_color;
-
-void main() {
-  vec4 worldPos = u_model * vec4(a_pos, 1.0);
-  v_pos = worldPos.xyz;
-  v_color = a_color;
-  gl_Position = u_proj * u_view * worldPos;
-  gl_PointSize = 3.0;
-}
-`;
-
-  const FRAGMENT_FLOWER = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-
-uniform float u_time;
-uniform float u_audio;
-uniform float u_bass;
-uniform float u_treble;
-
-varying vec3 v_pos;
-varying vec3 v_color;
-
-void main() {
-  vec3 col = v_color;
-
-  // glow nos vértices muito mais pronunciado
-  float glow = 0.5 + u_treble * 1.2;
-  col += vec3(1.0, 0.8, 1.0) * glow * 0.6;
-
-  // brilho com som forte
-  col *= 1.0 + u_audio * 0.8;
-
-  // pulsação com bass
-  col += vec3(0.2, 0.8, 1.0) * u_bass * 0.5;
-
-  gl_FragColor = vec4(col, 1.0);
-}
-`;
+  /* ========== SHADERS ========== */
 
   const VERTEX_BG = `
 precision mediump float;
@@ -151,9 +30,11 @@ precision highp float;
 precision mediump float;
 #endif
 
-uniform vec2 u_res;
 uniform float u_time;
 uniform float u_audio;
+uniform float u_bass;
+uniform float u_mid;
+uniform float u_pulse;
 uniform vec2 u_tilt;
 
 varying vec2 v_uv;
@@ -165,187 +46,529 @@ float hash21(vec2 p) {
 }
 
 void main() {
-  vec2 uv = v_uv;
   float t = u_time * 0.3;
 
-  // BACKGROUND MÁS OSCURO para que la flor brille
-  vec2 center = vec2(0.5);
-  float r = length(uv - center);
+  // a inclinação empurra o centro das formas
+  vec2 center = vec2(0.5) + u_tilt * 0.12;
+  float r = length(v_uv - center);
 
-  // gradiente: negro profundo → azul oscuro
   vec3 col = mix(
-    vec3(0.02, 0.02, 0.05),     // muy oscuro
-    vec3(0.08, 0.05, 0.15),     // azul oscuro
+    vec3(0.02, 0.02, 0.05),
+    vec3(0.08, 0.05, 0.15),
     smoothstep(0.0, 1.0, r)
   );
 
-  // pulso sutil de fondo
+  // respiração lenta do fundo + flash nas batidas
   col += vec3(0.05, 0.02, 0.08) * (0.3 + 0.2 * sin(t * 0.5));
+  col += vec3(0.10, 0.04, 0.12) * u_pulse;
 
-  // pequeñas ondas muy sutiles
-  col += vec3(0.1, 0.05, 0.15) * sin(r * 5.0 - t) * 0.1 * u_audio;
+  // ondas: os graves mandam na amplitude, o volume no brilho
+  float wave = sin(r * (5.0 + u_bass * 6.0) - t) * (0.06 + u_bass * 0.14);
+  col += vec3(0.10, 0.05, 0.15) * wave * (0.4 + u_audio);
 
-  // ruido muy bajo
-  col += (hash21(uv + t * 0.1) - 0.5) * 0.01;
+  // os médios deslocam a cor
+  col.r += u_mid * 0.06;
+  col.b -= u_mid * 0.04;
+
+  // grão muito baixo
+  col += (hash21(v_uv + t * 0.1) - 0.5) * 0.01;
 
   gl_FragColor = vec4(col, 1.0);
 }
 `;
 
-  // ========== GEOMETRIA ==========
-  const PHI = (1.0 + Math.sqrt(5.0)) / 2.0;
+  // Os dois estágios têm de declarar a MESMA precisão: os uniformes e os
+  // varying partilhados não podem ter precisões diferentes entre eles.
+  const VERTEX_MESH = `
+precision mediump float;
 
-  // Vértices de um dodecaedro inscrito
-  const DODECA_VERTS = [
-    [-1,-1,-1], [1,-1,-1], [-1,1,-1], [1,1,-1],
-    [-1,-1,1], [1,-1,1], [-1,1,1], [1,1,1],
-    [0,-PHI,-1/PHI], [0,PHI,-1/PHI], [-PHI,-1/PHI,0], [PHI,-1/PHI,0],
-    [-PHI,1/PHI,0], [PHI,1/PHI,0], [-1/PHI,0,-PHI], [1/PHI,0,-PHI],
-    [-1/PHI,0,PHI], [1/PHI,0,PHI], [0,-PHI,1/PHI], [0,PHI,1/PHI],
-  ];
+attribute vec3 a_pos;
+attribute vec3 a_norm;
+attribute vec3 a_color;
+attribute float a_rad;
 
-  // Faces pentagonais do dodecaedro (índices)
-  const DODECA_FACES = [
-    [0,8,9,2,14], [0,14,15,1,8], [0,10,12,2,14],
-    [1,11,13,3,15], [1,8,9,19,11], [2,9,19,6,12],
-    [3,13,12,6,7], [3,15,14,2,9], [4,17,16,6,19],
-    [4,18,11,5,17], [4,10,0,8,18], [5,11,13,7,17],
-    [5,18,8,1,11], [6,16,10,12,19], [7,13,3,15,17],
-    [7,17,16,4,10], [9,14,2,12,19], [10,0,14,15,11],
-    [16,17,5,4,18], [16,6,12,10,4],
-  ];
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform mat4 u_model;
+uniform mat3 u_normalMat;
+uniform float u_time;
+uniform float u_audio;
+uniform float u_bass;
+uniform float u_mid;
+uniform float u_treble;
+uniform float u_pulse;
 
-  // ========== GEOMETRIA DA FLOR ==========
-  function makeFlower(layers = 6) {
-    const verts = [];
-    const colors = [];
+varying vec3 v_color;
+varying vec3 v_norm;
+varying vec3 v_world;
+varying float v_rad;
 
-    // pétalas: camadas simples, FÁCIL de ver
-    for (let layer = 0; layer < layers; layer++) {
-      const ratio = (layer + 1) / layers;
-      const radius = 0.2 + ratio * 1.2;  // mais grande
-      const height = Math.sin(ratio * Math.PI) * 0.3;
-      const segments = 20 + layer * 3;  // mais pontos
+void main() {
+  vec3 p = a_pos;
+  float r = a_rad;
+  vec2 dir = normalize(vec2(p.x, p.z) + vec2(0.0001));
 
-      for (let i = 0; i < segments; i++) {
-        const angle = (i / segments) * Math.PI * 2;
-        const x = Math.cos(angle) * radius;
-        const z = Math.sin(angle) * radius;
-        const y = height - 0.3;  // mais abaixo
+  // abrir: os graves endireitam as pétalas, o volume puxa todas
+  float open = u_bass * 0.30 + u_audio * 0.10;
 
-        verts.push(x, y, z);
+  // onda que corre da borda para o centro a cada batida
+  float ripple = sin(r * 9.0 - u_time * 5.5) * u_pulse * 0.075;
 
-        // cor VERMELHA: gradiente vermelho escuro → vermelho brilhante
-        const red = 0.8 + ratio * 0.2;    // 0.8 a 1.0
-        const green = 0.05 * ratio;        // 0.0 a 0.05
-        const blue = 0.05 * ratio;         // 0.0 a 0.05
-        colors.push(red, green, blue);
-      }
-    }
+  // respiração espectral: agudos no centro, graves na borda
+  float breath = mix(u_treble, u_bass, r) * 0.10;
 
-    // miolo (esfera, VERMELHO INTENSO)
-    const coreSegments = 16;
-    const coreLayers = 8;
-    for (let lat = 0; lat < coreLayers; lat++) {
-      const theta = (lat / coreLayers) * Math.PI;
-      const sinTheta = Math.sin(theta);
-      const y = Math.cos(theta) * 0.2 - 0.3;
+  // tremor fino dos médios
+  float shimmer = sin(p.y * 18.0 + u_time * 3.0 + r * 12.0) * u_mid * 0.012;
 
-      for (let lon = 0; lon < coreSegments; lon++) {
-        const phi = (lon / coreSegments) * Math.PI * 2;
-        const x = Math.sin(phi) * sinTheta * 0.2;
-        const z = Math.cos(phi) * sinTheta * 0.2;
+  // vaga que corre à volta da corola: os médios fazem as pétalas ondular em azimute
+  float az = atan(p.z, p.x + 0.0001);
+  float sway = sin(az * 6.0 + u_time * 2.2) * u_mid * 0.035;
 
-        verts.push(x, y, z);
-        colors.push(1.0, 0.2, 0.0); // rojo naranja intenso
-      }
-    }
+  p.xz += dir * (open + breath) * r * 0.55;
+  p.y += ripple + open * 0.42 * r + shimmer + sway * (0.25 + r);
 
-    // gotas de agua: puntos brillantes BLANCOS
-    const dropCount = 30;
-    for (let i = 0; i < dropCount; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const radius = 0.4 + Math.random() * 0.8;
-      const height = (Math.random() - 0.5) * 0.6 - 0.3;
-      const x = Math.cos(angle) * radius;
-      const z = Math.sin(angle) * radius;
+  vec4 world = u_model * vec4(p, 1.0);
+  v_world = world.xyz;
+  v_norm = normalize(u_normalMat * a_norm);
+  v_color = a_color;
+  v_rad = r;
 
-      verts.push(x, height, z);
-      colors.push(1.0, 1.0, 0.9); // blanco brillante
-    }
+  gl_Position = u_proj * u_view * world;
+}
+`;
 
-    return { verts: new Float32Array(verts), colors: new Float32Array(colors), count: verts.length / 3 };
+  const FRAGMENT_MESH = `
+precision mediump float;
+
+uniform vec3 u_eye;
+uniform float u_audio;
+uniform float u_bass;
+uniform float u_mid;
+uniform float u_treble;
+uniform float u_pulse;
+
+varying vec3 v_color;
+varying vec3 v_norm;
+varying vec3 v_world;
+varying float v_rad;
+
+void main() {
+  vec3 N = normalize(v_norm);
+  vec3 V = normalize(u_eye - v_world);
+
+  // pétalas finas: a normal vira sempre para quem vê, dos dois lados
+  float face = step(0.0, dot(N, V)) * 2.0 - 1.0;
+  N *= face;
+
+  vec3 L = normalize(vec3(0.45, 0.85, 0.35));
+  vec3 H = normalize(L + V);
+
+  float diff = max(dot(N, L), 0.0);
+  // luz de preenchimento vinda da câmara: as pétalas viradas a quem vê não ficam pretas
+  float fill = max(dot(N, V), 0.0);
+  // luz atravessada: vista por detrás, a pétala acende como vidro colorido
+  float trans = pow(max(dot(-N, L), 0.0), 3.0);
+  float spec = pow(max(dot(N, H), 0.0), 28.0);
+  float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+
+  // espectro por raio: borda = graves, centro = agudos
+  float t = clamp(v_rad, 0.0, 1.0);
+  float band = mix(u_treble, u_bass, t);
+
+  vec3 col = v_color * (0.42 + diff * 0.80 + fill * 0.30);
+  col += v_color * trans * (0.15 + band * 1.05);
+  col += vec3(1.0, 0.92, 0.82) * spec * (0.30 + u_treble * 0.55);
+  col += mix(vec3(0.85, 0.20, 0.75), vec3(1.0, 0.55, 0.22), t) * fres * (0.18 + u_mid * 0.75);
+  col += v_color * u_pulse * (0.30 + 0.62 * t);
+
+  // matizes por banda: multiplicativo, por isso ganha intensidade sem lavar a cor
+  col *= mix(vec3(1.0), vec3(1.24, 0.72, 1.14), clamp(u_treble, 0.0, 1.0) * 0.45);
+  col *= mix(vec3(1.0), vec3(1.14, 1.00, 0.76), clamp(u_bass, 0.0, 1.0) * 0.35);
+  col *= 0.95 + u_audio * 0.35;
+
+  // névoa de profundidade: separa a flor do fundo e dá volume, mas deixa
+  // ver o caule (que fica longe por causa da perspectiva)
+  float depth = length(u_eye - v_world);
+  col = mix(col, vec3(0.05, 0.04, 0.10), smoothstep(3.6, 8.0, depth));
+
+  // tone mapping: segura os realces sem estourar o vermelho
+  col = vec3(1.0) - exp(-col * 1.75);
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+  const VERTEX_POINTS = `
+precision mediump float;
+
+attribute vec3 a_pos;
+attribute float a_rad;
+
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform mat4 u_model;
+uniform float u_time;
+uniform float u_treble;
+uniform float u_pulse;
+uniform float u_dpr;
+uniform float u_cloud;
+
+varying float v_rad;
+varying float v_twinkle;
+
+void main() {
+  vec3 p = a_pos;
+  float r = clamp(a_rad, 0.0, 1.0);
+
+  // deriva em espiral, sobe nas batidas
+  float ph = u_time * (0.35 + u_treble * 1.2) + r * 6.2831;
+  p.x += sin(ph) * 0.07;
+  p.z += cos(ph * 0.9) * 0.07;
+  p.y += sin(u_time * 0.9 + r * 7.0) * 0.10 + u_pulse * 0.16;
+
+  v_rad = r;
+  v_twinkle = 0.35 + 0.65 * (0.5 + 0.5 * sin(u_time * 6.0 + r * 40.0));
+
+  gl_Position = u_proj * u_view * u_model * vec4(p, 1.0);
+  // u_cloud = 1 mantém o tamanho original; 0,55..1,45 cobre o curso do controlo
+  gl_PointSize = (2.0 + u_treble * 9.0 + u_pulse * 5.0) * (0.6 + 0.4 * r) * u_dpr * (0.55 + 0.45 * u_cloud);
+}
+`;
+
+  const FRAGMENT_POINTS = `
+precision mediump float;
+
+uniform float u_treble;
+uniform float u_cloud;
+
+varying float v_rad;
+varying float v_twinkle;
+
+void main() {
+  // sprite redondo e suave
+  float d = length(gl_PointCoord - vec2(0.5));
+  float a = smoothstep(0.5, 0.06, d) * v_twinkle * (0.22 + u_treble * 0.95) * u_cloud;
+  if (a < 0.02) discard;
+
+  vec3 col = mix(vec3(1.0, 0.86, 0.45), vec3(1.0, 0.50, 0.86), v_rad);
+  gl_FragColor = vec4(col, a);
+}
+`;
+
+  /* ========== GEOMETRIA ========== */
+
+  // Lâmina (pétala ou folha): perfil ao longo do comprimento, curvatura e copo,
+  // depois levantada em torno de X e rodada em torno do eixo Y pela azimute.
+  function bladeSampler(o, azimuth) {
+    const ct = Math.cos(o.tilt);
+    const st = Math.sin(o.tilt);
+    const ca = Math.cos(azimuth);
+    const sa = Math.sin(azimuth);
+    return function (u, v01) {
+      const v = v01 - 0.5;
+      const profile = Math.pow(u, o.round) * (1 - o.tip * Math.pow(u, o.tipPow));
+      const x = v * o.width * profile;
+      const z = o.radius + u * o.length;
+      const y = o.curl * o.length * u * u + o.cup * o.width * 4 * v * v + o.twist * o.length * u * v;
+      const yy = y * ct + z * st + o.y;
+      const zz = -y * st + z * ct;
+      return [x * ca + zz * sa, yy, -x * sa + zz * ca + o.zoff];
+    };
   }
 
-  function makeDodeca(scale = 0.7) {
-    const verts = [];
-    const norms = [];
-    const colors = [];
-    const indices = [];
+  function bladeColor(a, b) {
+    return function (u, v) {
+      const k = Math.pow(u, 0.8);
+      const midrib = 1 + 0.30 * Math.exp(-(v * v) / 0.010);
+      const edge = 1 - 0.22 * Math.pow(Math.abs(v) * 2, 3);
+      const f = midrib * edge;
+      return [
+        clamp(a[0] + (b[0] - a[0]) * k, 0, 1.2) * f,
+        clamp(a[1] + (b[1] - a[1]) * k, 0, 1.2) * f,
+        clamp(a[2] + (b[2] - a[2]) * k, 0, 1.2) * f,
+      ];
+    };
+  }
 
-    // normalizar vértices
-    for (let v of DODECA_VERTS) {
-      let len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-      verts.push(v[0]/len*scale, v[1]/len*scale, v[2]/len*scale);
-    }
+  // voltas de pétalas, de fora (deitada) para dentro (direita)
+  const WHORLS = [
+    { count: 13, radius: 0.160, length: 0.95, width: 0.215, tilt: 0.30, curl: 0.10, cup: 0.16, twist: 0.050, base: [0.30, 0.04, 0.13], tipCol: [0.86, 0.17, 0.30] },
+    { count: 11, radius: 0.135, length: 0.76, width: 0.195, tilt: 0.52, curl: 0.13, cup: 0.20, twist: 0.045, base: [0.36, 0.05, 0.15], tipCol: [0.92, 0.24, 0.38] },
+    { count: 9, radius: 0.105, length: 0.58, width: 0.168, tilt: 0.74, curl: 0.16, cup: 0.24, twist: 0.040, base: [0.42, 0.07, 0.17], tipCol: [0.97, 0.34, 0.48] },
+    { count: 7, radius: 0.075, length: 0.42, width: 0.135, tilt: 0.98, curl: 0.20, cup: 0.28, twist: 0.035, base: [0.50, 0.10, 0.20], tipCol: [1.00, 0.46, 0.58] },
+    { count: 5, radius: 0.045, length: 0.28, width: 0.105, tilt: 1.22, curl: 0.24, cup: 0.32, twist: 0.030, base: [0.58, 0.14, 0.22], tipCol: [1.00, 0.60, 0.70] },
+  ];
 
-    let idx = 0;
-    for (let face of DODECA_FACES) {
-      // triangular cada pentágono: vertex 0,1,2, então 0,2,3, então 0,3,4
-      for (let i = 1; i < face.length - 1; i++) {
-        const [a, b, c] = [face[0], face[i], face[i+1]];
+  const BLADE_OPTS = { round: 0.40, tip: 0.42, tipPow: 4, y: 0, zoff: 0 };
 
-        // normal (triângulo)
-        const v1 = [
-          DODECA_VERTS[b][0] - DODECA_VERTS[a][0],
-          DODECA_VERTS[b][1] - DODECA_VERTS[a][1],
-          DODECA_VERTS[b][2] - DODECA_VERTS[a][2]
-        ];
-        const v2 = [
-          DODECA_VERTS[c][0] - DODECA_VERTS[a][0],
-          DODECA_VERTS[c][1] - DODECA_VERTS[a][1],
-          DODECA_VERTS[c][2] - DODECA_VERTS[a][2]
-        ];
-        let nx = v1[1]*v2[2] - v1[2]*v2[1];
-        let ny = v1[2]*v2[0] - v1[0]*v2[2];
-        let nz = v1[0]*v2[1] - v1[1]*v2[0];
-        let nlen = Math.sqrt(nx*nx + ny*ny + nz*nz);
-        if (nlen > 0.001) { nx/=nlen; ny/=nlen; nz/=nlen; }
+  // folhas presas ao caule; zoff acompanha a curva do caule à altura de cada uma
+  const LEAVES = [
+    { az: 0.7, y: -0.55, zoff: 0.03, length: 0.46, width: 0.24, tilt: 0.16, curl: -0.10, cup: 0.12, twist: 0.03 },
+    { az: 2.7, y: -0.80, zoff: 0.06, length: 0.40, width: 0.215, tilt: 0.12, curl: -0.12, cup: 0.12, twist: -0.03 },
+    { az: 4.5, y: -1.06, zoff: 0.10, length: 0.34, width: 0.185, tilt: 0.08, curl: -0.14, cup: 0.12, twist: 0.03 },
+    { az: 5.7, y: -1.34, zoff: 0.17, length: 0.30, width: 0.165, tilt: 0.05, curl: -0.16, cup: 0.12, twist: -0.03 },
+  ];
 
-        // cor alternada: roxo VIBRANTE + verde VIBRANTE
-        const hue = (idx % 2) === 0 ? [1.0, 0.1, 1.0] : [0.1, 1.0, 0.3];
+  function newGeo() {
+    return { pos: [], nrm: [], col: [], rad: [], idx: [] };
+  }
 
-        for (let vi of [a, b, c]) {
-          indices.push(verts.length / 3);
-          verts.push(DODECA_VERTS[vi][0]/Math.sqrt(3), DODECA_VERTS[vi][1]/Math.sqrt(3), DODECA_VERTS[vi][2]/Math.sqrt(3));
-          norms.push(nx, ny, nz);
-          colors.push(...hue);
-        }
-        idx++;
+  // adiciona uma superfície parametrizada; normais por diferenças finitas
+  function addSurface(g, nu, nv, sampler, colorFn, radFn) {
+    const eps = 0.001;
+    const start = g.pos.length / 3;
+    const row = nv + 1;
+
+    for (let i = 0; i <= nu; i++) {
+      const u = i / nu;
+      for (let j = 0; j <= nv; j++) {
+        const v = j / nv;
+        const p = sampler(u, v);
+        const pu = sampler(c01(u + eps), v);
+        const mu = sampler(c01(u - eps), v);
+        const pv = sampler(u, c01(v + eps));
+        const mv = sampler(u, c01(v - eps));
+
+        const du = [pu[0] - mu[0], pu[1] - mu[1], pu[2] - mu[2]];
+        const dv = [pv[0] - mv[0], pv[1] - mv[1], pv[2] - mv[2]];
+        const n = normalize3(cross3(du, dv));
+
+        const c = colorFn(u, v);
+        g.pos.push(p[0], p[1], p[2]);
+        g.nrm.push(n[0], n[1], n[2]);
+        g.col.push(c[0], c[1], c[2]);
+        g.rad.push(radFn(u, v));
       }
     }
 
-    return { verts: new Float32Array(verts), norms: new Float32Array(norms), colors: new Float32Array(colors), indices: new Uint16Array(indices), count: indices.length };
+    for (let i = 0; i < nu; i++) {
+      for (let j = 0; j < nv; j++) {
+        const a = start + i * row + j;
+        const b = a + 1;
+        const c = a + row;
+        const d = c + 1;
+        g.idx.push(a, c, b, b, c, d);
+      }
+    }
   }
 
-  // ========== RENDERIZADOR ==========
+  // filetes: tubo fino que sai do miolo e inclina para fora, com antera na ponta
+  function stamenSampler(azimuth, lean, len) {
+    const ca = Math.cos(azimuth);
+    const sa = Math.sin(azimuth);
+    const ex = Math.sin(lean);
+    const ey = Math.cos(lean);
+    return function (u, v) {
+      const phi = v * Math.PI * 2;
+      const bulb = Math.exp(-Math.pow((u - 0.94) * 7.0, 2));
+      const rad = 0.007 + 0.006 * u + 0.016 * bulb;
+      const along = u * len;
+      const radial = ex * along + ey * Math.cos(phi) * rad;
+      const vertical = ey * along - ex * Math.cos(phi) * rad;
+      const tangential = Math.sin(phi) * rad;
+      return [ca * radial - sa * tangential, vertical, sa * radial + ca * tangential];
+    };
+  }
+
+  function buildFlower() {
+    const g = newGeo();
+    const blade = Object.create(BLADE_OPTS);
+
+    // 5 voltas de pétalas, cada volta meia azimute da anterior
+    WHORLS.forEach(function (w, wi) {
+      const offset = wi * (Math.PI / w.count);
+      for (let i = 0; i < w.count; i++) {
+        blade.radius = w.radius;
+        blade.length = w.length;
+        blade.width = w.width;
+        blade.tilt = w.tilt;
+        blade.curl = w.curl;
+        blade.cup = w.cup;
+        blade.twist = w.twist * (i % 2 ? 1 : -1);
+        blade.round = BLADE_OPTS.round;
+        blade.tip = BLADE_OPTS.tip;
+        blade.tipPow = BLADE_OPTS.tipPow;
+        blade.y = 0;
+        blade.zoff = 0;
+
+        const az = offset + (i / w.count) * Math.PI * 2;
+        addSurface(
+          g,
+          9,
+          6,
+          bladeSampler(blade, az),
+          bladeColor(w.base, w.tipCol),
+          function (u) { return c01((w.radius + u * w.length) / 1.15); }
+        );
+      }
+    });
+
+    // sépalas: cinco lâminas verdes na base da corola
+    for (let i = 0; i < 5; i++) {
+      blade.radius = 0.05;
+      blade.length = 0.30;
+      blade.width = 0.11;
+      blade.tilt = 0.22;
+      blade.curl = 0.05;
+      blade.cup = 0.22;
+      blade.twist = 0.02;
+      blade.round = 0.45;
+      blade.tip = 0.55;
+      blade.tipPow = 5;
+      blade.y = -0.10;
+      blade.zoff = 0;
+      addSurface(
+        g,
+        7,
+        5,
+        bladeSampler(blade, (i / 5) * Math.PI * 2 + 0.4),
+        bladeColor([0.08, 0.26, 0.06], [0.26, 0.52, 0.14]),
+        function () { return 0.02; }
+      );
+    }
+
+    // miolo: domo alaranjado coberto de sementes
+    addSurface(
+      g,
+      6,
+      18,
+      function (u, v) {
+        const th = u * Math.PI * 0.55;
+        const phi = v * Math.PI * 2;
+        const rr = 0.175 * Math.sin(th);
+        const yy = 0.205 * Math.cos(th) - 0.015;
+        const seed = 0.006 * Math.sin(phi * 9.0) * Math.sin(th * 5.0);
+        return [Math.cos(phi) * (rr + seed), yy, Math.sin(phi) * (rr + seed)];
+      },
+      function (u, v) {
+        const k = 1 - u;
+        const speck = 0.75 + 0.25 * Math.sin(v * Math.PI * 2 * 11.0) * Math.sin(u * Math.PI * 4.0);
+        return [(0.50 + 0.45 * k) * speck, (0.26 + 0.30 * k) * speck, 0.05 + 0.06 * u];
+      },
+      function () { return 0.05; }
+    );
+
+    // filetes à volta do miolo
+    for (let i = 0; i < 20; i++) {
+      const az = (i / 20) * Math.PI * 2 + 0.15;
+      const lean = 0.34 + 0.12 * Math.sin(i * 2.3);
+      const len = 0.30 + 0.07 * Math.cos(i * 1.7);
+      addSurface(
+        g,
+        5,
+        5,
+        stamenSampler(az, lean, len),
+        function (u) {
+          const head = Math.pow(c01((u - 0.55) / 0.45), 2);
+          return [0.45 + 0.55 * head, 0.52 - 0.16 * head, 0.20 - 0.14 * head];
+        },
+        function (u) { return 0.02 + u * 0.10; }
+      );
+    }
+
+    // caule: comprido e curvado para a frente, para se ver inteiro em 3/4
+    addSurface(
+      g,
+      14,
+      8,
+      function (u, v) {
+        const phi = v * Math.PI * 2;
+        const y = -1.72 + u * 1.66;
+        const rr = 0.036 - 0.016 * u;
+        // o pé vem para a câmara: sem isto o caule foge para trás e desaparece
+        const zc = 0.30 * (1 - u) * (1 - u);
+        const xc = Math.sin(u * 2.2) * 0.045;
+        return [Math.cos(phi) * rr + xc, y, Math.sin(phi) * rr + zc];
+      },
+      function (u, v) {
+        const lit = 0.7 + 0.3 * Math.cos(v * Math.PI * 2);
+        return [0.13 * lit, (0.44 + 0.12 * u) * lit, 0.11 * lit];
+      },
+      function () { return 0.0; }
+    );
+
+    // folhas presas ao caule: a_rad alto, por isso tremem com os graves
+    LEAVES.forEach(function (L) {
+      blade.radius = 0.04;
+      blade.length = L.length;
+      blade.width = L.width;
+      blade.tilt = L.tilt;
+      blade.curl = L.curl;
+      blade.cup = L.cup;
+      blade.twist = L.twist;
+      blade.round = 0.38;
+      blade.tip = 0.50;
+      blade.tipPow = 4;
+      blade.y = L.y;
+      blade.zoff = L.zoff;
+      addSurface(
+        g,
+        8,
+        6,
+        bladeSampler(blade, L.az),
+        bladeColor([0.07, 0.24, 0.06], [0.26, 0.56, 0.16]),
+        function () { return 0.90; }
+      );
+    });
+
+    return {
+      pos: new Float32Array(g.pos),
+      nrm: new Float32Array(g.nrm),
+      col: new Float32Array(g.col),
+      rad: new Float32Array(g.rad),
+      idx: new Uint16Array(g.idx),
+      count: g.idx.length,
+    };
+  }
+
+  // grão de pólen: pontos aditivos que flutuam sobre a corola
+  function buildPollen(n) {
+    const pos = new Float32Array(n * 3);
+    const rad = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const az = Math.random() * Math.PI * 2;
+      const rr = 0.12 + Math.pow(Math.random(), 0.7) * 0.62;
+      pos[i * 3] = Math.cos(az) * rr;
+      pos[i * 3 + 1] = 0.05 + Math.random() * 0.55;
+      pos[i * 3 + 2] = Math.sin(az) * rr;
+      rad[i] = c01(rr / 0.74);
+    }
+    return { pos: pos, rad: rad, count: n };
+  }
+
+  /* ========== ESTADO ========== */
+
   let gl = null;
-  let progBg = null, progDodeca = null;
-  let dodeca = null;
-  let vao = null, vaoIndices = null;
-  let state = { audio: 0, bass: 0, mid: 0, treble: 0, pulse: 0, tiltX: 0, tiltY: 0 };
-  let time = 0;
-  let raf = 0;
-  let wireframe = false;
   let canvas = null;
-  let rendererMode = 'webgl'; // ou '2d' se fallback
+  let driver = null;
+  let raf = 0;
+  let rendererMode = 'webgl';
 
-  // variáveis da flor
-  let progFlower = null;
-  let flower = null;
-  let flowerVerts = null;
-  let flowerColors = null;
-  let flowerRotation = 0;
+  let progBg = null;
+  let progMesh = null;
+  let progPoints = null;
+  let bgBuffer = null;
+  let mesh = null;
+  let pollen = null;
+
+  let time = 0;
+  let timeScale = 1;
+  let spin = 0;
+  let lastFrameTime = 0;
+
+  const eye = [0, 0, 3.5];
+
+  let proj = identity();
+  let view = lookAt(eye, [0, 0, 0], [0, 1, 0]);
+
+  let quality = 1; // cai quando os fps não chegam
+  let fpsAvg = 60;
+  let lastTune = 0;
+  let pixelScale = 1;
+
+  const state = { audio: 0, bass: 0, mid: 0, treble: 0, pulse: 0, tiltX: 0, tiltY: 0, cloud: 1 };
+
+  /* ========== GL ========== */
 
   function compileShader(type, src) {
     const s = gl.createShader(type);
@@ -353,21 +576,40 @@ void main() {
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
       console.error('[v1su4rt] Shader error:', gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
       return null;
     }
     return s;
   }
 
-  function linkProgram(vs, fs) {
+  function buildProgram(vsSrc, fsSrc, attribs, uniforms) {
+    const vs = compileShader(gl.VERTEX_SHADER, vsSrc);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) return null;
+
     const p = gl.createProgram();
     gl.attachShader(p, vs);
     gl.attachShader(p, fs);
     gl.linkProgram(p);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
       console.error('[v1su4rt] Link error:', gl.getProgramInfoLog(p));
+      gl.deleteProgram(p);
       return null;
     }
-    return p;
+
+    const prog = { program: p, attrib: {}, uniform: {} };
+    attribs.forEach((n) => { prog.attrib[n] = gl.getAttribLocation(p, n); });
+    uniforms.forEach((n) => { prog.uniform[n] = gl.getUniformLocation(p, n); });
+    return prog;
+  }
+
+  function staticBuffer(target, data) {
+    const b = gl.createBuffer();
+    gl.bindBuffer(target, b);
+    gl.bufferData(target, data, gl.STATIC_DRAW);
+    return b;
   }
 
   function initGL() {
@@ -383,255 +625,338 @@ void main() {
       console.error('[v1su4rt] WebGL indisponível:', e);
       return false;
     }
+    if (!gl) return false;
 
-    if (!gl) {
-      console.info('[v1su4rt] WebGL indisponível, usando Canvas2D');
-      rendererMode = '2d';
-      return false;
-    }
+    progBg = buildProgram(VERTEX_BG, FRAGMENT_BG, ['a_pos'], ['u_time', 'u_audio', 'u_bass', 'u_mid', 'u_pulse', 'u_tilt']);
+    progMesh = buildProgram(
+      VERTEX_MESH,
+      FRAGMENT_MESH,
+      ['a_pos', 'a_norm', 'a_color', 'a_rad'],
+      ['u_proj', 'u_view', 'u_model', 'u_normalMat', 'u_eye', 'u_time', 'u_audio', 'u_bass', 'u_mid', 'u_treble', 'u_pulse']
+    );
+    progPoints = buildProgram(
+      VERTEX_POINTS,
+      FRAGMENT_POINTS,
+      ['a_pos', 'a_rad'],
+      ['u_proj', 'u_view', 'u_model', 'u_time', 'u_treble', 'u_pulse', 'u_dpr', 'u_cloud']
+    );
+    if (!progBg || !progMesh || !progPoints) return false;
 
     gl.enable(gl.DEPTH_TEST);
-    gl.clearColor(0.05, 0.02, 0.08, 1.0);
+    gl.clearColor(0.02, 0.02, 0.05, 1.0);
 
-    // programa background
-    const vsBg = compileShader(gl.VERTEX_SHADER, VERTEX_BG);
-    const fsBg = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_BG);
-    if (!vsBg || !fsBg) return false;
-    progBg = linkProgram(vsBg, fsBg);
-    if (!progBg) return false;
+    // tudo criado uma única vez: nada de buffers novos por frame
+    bgBuffer = staticBuffer(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
 
-    // programa dodecaedro
-    const vs = compileShader(gl.VERTEX_SHADER, VERTEX_3D);
-    const fs = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_3D);
-    if (!vs || !fs) return false;
-    progDodeca = linkProgram(vs, fs);
-    if (!progDodeca) return false;
+    const f = buildFlower();
+    mesh = {
+      pos: staticBuffer(gl.ARRAY_BUFFER, f.pos),
+      nrm: staticBuffer(gl.ARRAY_BUFFER, f.nrm),
+      col: staticBuffer(gl.ARRAY_BUFFER, f.col),
+      rad: staticBuffer(gl.ARRAY_BUFFER, f.rad),
+      idx: staticBuffer(gl.ELEMENT_ARRAY_BUFFER, f.idx),
+      count: f.count,
+    };
 
-    // geometria
-    dodeca = makeDodeca(1.0);
+    const pl = buildPollen(140);
+    pollen = {
+      pos: staticBuffer(gl.ARRAY_BUFFER, pl.pos),
+      rad: staticBuffer(gl.ARRAY_BUFFER, pl.rad),
+      count: pl.count,
+    };
 
-    // VAO (se suportado)
-    const ext = gl.getExtension('OES_vertex_array_object');
-    if (ext) {
-      vao = ext.createVertexArrayOES();
-      ext.bindVertexArrayOES(vao);
-    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
-    // buffers
-    const posBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, dodeca.verts, gl.STATIC_DRAW);
-    let posLoc = gl.getAttribLocation(progDodeca, 'a_pos');
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
-
-    const normBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, dodeca.norms, gl.STATIC_DRAW);
-    let normLoc = gl.getAttribLocation(progDodeca, 'a_norm');
-    gl.enableVertexAttribArray(normLoc);
-    gl.vertexAttribPointer(normLoc, 3, gl.FLOAT, false, 0, 0);
-
-    const colorBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, dodeca.colors, gl.STATIC_DRAW);
-    let colorLoc = gl.getAttribLocation(progDodeca, 'a_color');
-    gl.enableVertexAttribArray(colorLoc);
-    gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
-
-    vaoIndices = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, dodeca.indices, gl.STATIC_DRAW);
-
-    if (ext) ext.bindVertexArrayOES(null);
-
-    // --- INICIALIZAR FLOR ---
-    const vsFlower = compileShader(gl.VERTEX_SHADER, VERTEX_FLOWER);
-    const fsFlower = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_FLOWER);
-    if (vsFlower && fsFlower) {
-      progFlower = linkProgram(vsFlower, fsFlower);
-      if (progFlower) {
-        flower = makeFlower(8); // 8 camadas de pétalas
-
-        // buffers da flor
-        flowerVerts = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, flowerVerts);
-        gl.bufferData(gl.ARRAY_BUFFER, flower.verts, gl.STATIC_DRAW);
-
-        flowerColors = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, flowerColors);
-        gl.bufferData(gl.ARRAY_BUFFER, flower.colors, gl.STATIC_DRAW);
-      }
-    }
-
+    resize();
     return true;
   }
 
-  function resizeGL() {
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
+  /* Resolução interna: limitada por breakpoint e degradada quando faltam fps. */
+  function targetScale() {
+    const w = window.innerWidth;
+    const cap = w < 640 ? 1.5 : w < 1024 ? 1.75 : 2;
+    return Math.min(window.devicePixelRatio || 1, cap) * quality;
+  }
+
+  function resize() {
+    const scale = targetScale();
+    const w = Math.max(1, Math.round(canvas.clientWidth * scale));
+    const h = Math.max(1, Math.round(canvas.clientHeight * scale));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
+      proj = perspective(45, w / h, 0.1, 100);
+      view = lookAt(eye, [0, 0, 0], [0, 1, 0]);
     }
-    if (gl) gl.viewport(0, 0, w, h);
+    pixelScale = scale;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+
+  function tuneQuality(dt) {
+    fpsAvg += (1 / dt - fpsAvg) * 0.05;
+    const now = performance.now();
+    if (now - lastTune < 1000) return;
+    lastTune = now;
+    if (fpsAvg < 40 && quality > 0.5) quality = Math.max(0.5, quality - 0.1);
+    else if (fpsAvg > 55 && quality < 1) quality = Math.min(1, quality + 0.05);
+  }
+
+  /* ========== RENDER ========== */
+
+  function drawBackground() {
+    const p = progBg;
+    gl.useProgram(p.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bgBuffer);
+    gl.enableVertexAttribArray(p.attrib.a_pos);
+    gl.vertexAttribPointer(p.attrib.a_pos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.uniform1f(p.uniform.u_time, time);
+    gl.uniform1f(p.uniform.u_audio, state.audio);
+    gl.uniform1f(p.uniform.u_bass, state.bass);
+    gl.uniform1f(p.uniform.u_mid, state.mid);
+    gl.uniform1f(p.uniform.u_pulse, state.pulse);
+    gl.uniform2f(p.uniform.u_tilt, state.tiltX, state.tiltY);
+
+    // o quad ocupa o ecrã todo a profundidade 0.5: se escrever no depth buffer
+    // tapa tudo o que estiver mais longe, incluindo a flor
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.depthMask(true);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  function setMeshMatrices(p, model) {
+    gl.uniformMatrix4fv(p.uniform.u_proj, false, proj);
+    gl.uniformMatrix4fv(p.uniform.u_view, false, view);
+    gl.uniformMatrix4fv(p.uniform.u_model, false, model);
+    gl.uniform3f(p.uniform.u_eye, eye[0], eye[1], eye[2]);
+  }
+
+  function bindMeshAttrib(p) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.pos);
+    gl.enableVertexAttribArray(p.attrib.a_pos);
+    gl.vertexAttribPointer(p.attrib.a_pos, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.nrm);
+    gl.enableVertexAttribArray(p.attrib.a_norm);
+    gl.vertexAttribPointer(p.attrib.a_norm, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.col);
+    gl.enableVertexAttribArray(p.attrib.a_color);
+    gl.vertexAttribPointer(p.attrib.a_color, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.rad);
+    gl.enableVertexAttribArray(p.attrib.a_rad);
+    gl.vertexAttribPointer(p.attrib.a_rad, 1, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.idx);
+  }
+
+  function drawFlower(dt) {
+    // as batidas dão um empurrão na rotação: a flor acelera e volta ao ritmo
+    spin += dt * timeScale * (0.10 + state.audio * 0.22 + state.pulse * 0.45);
+    const tx = clamp(state.tiltX, -1.2, 1.2);
+    const ty = clamp(state.tiltY, -1.2, 1.2);
+
+    // 3/4: a base de ~1.02 rad (~58°) faz a câmara olhar para dentro da corola,
+    // por isso o giroscópio e o rato também inclinam a flor, não só o fundo
+    const s = 0.82 * (0.98 + state.audio * 0.04 + state.pulse * 0.02);
+    let model = mat4Scale(s, s, s);
+    model = multiplyMatrices(mat4RotateY(spin), model);
+    model = multiplyMatrices(mat4RotateZ(tx * 0.25), model);
+    // os graves fazem a flor inclinar-se para a frente
+    model = multiplyMatrices(mat4RotateX(1.02 + ty * 0.25 - state.bass * 0.10), model);
+    model = multiplyMatrices(mat4Translate(0, 0.04, 0), model);
+
+    const p = progMesh;
+    gl.useProgram(p.program);
+    setMeshMatrices(p, model);
+    gl.uniformMatrix3fv(p.uniform.u_normalMat, false, mat3FromMat4(model));
+    gl.uniform1f(p.uniform.u_time, time);
+    gl.uniform1f(p.uniform.u_audio, state.audio);
+    gl.uniform1f(p.uniform.u_bass, state.bass);
+    gl.uniform1f(p.uniform.u_mid, state.mid);
+    gl.uniform1f(p.uniform.u_treble, state.treble);
+    gl.uniform1f(p.uniform.u_pulse, state.pulse);
+    bindMeshAttrib(p);
+
+    gl.depthMask(true);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+
+    drawPollen(model);
+  }
+
+  function drawPollen(model) {
+    // intensidade a zero: nem se envia o draw call
+    if (state.cloud <= 0.001) return;
+    const p = progPoints;
+    gl.useProgram(p.program);
+    gl.uniformMatrix4fv(p.uniform.u_proj, false, proj);
+    gl.uniformMatrix4fv(p.uniform.u_view, false, view);
+    gl.uniformMatrix4fv(p.uniform.u_model, false, model);
+    gl.uniform1f(p.uniform.u_time, time);
+    gl.uniform1f(p.uniform.u_treble, state.treble);
+    gl.uniform1f(p.uniform.u_pulse, state.pulse);
+    gl.uniform1f(p.uniform.u_dpr, pixelScale);
+    gl.uniform1f(p.uniform.u_cloud, state.cloud);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pollen.pos);
+    gl.enableVertexAttribArray(p.attrib.a_pos);
+    gl.vertexAttribPointer(p.attrib.a_pos, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pollen.rad);
+    gl.enableVertexAttribArray(p.attrib.a_rad);
+    gl.vertexAttribPointer(p.attrib.a_rad, 1, gl.FLOAT, false, 0, 0);
+
+    // aditivo, sem escrever profundidade: brilho por cima de tudo
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+    gl.depthMask(false);
+    gl.drawArrays(gl.POINTS, 0, pollen.count);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
   }
 
   function frame(now) {
     raf = requestAnimationFrame(frame);
-    const dt = Math.min(0.1, Math.max(0.001, (now - window._lastFrame || now) / 1000));
-    window._lastFrame = now;
-    time += dt;
+    const dt = clamp((now - lastFrameTime) / 1000, 0.001, 0.1);
+    lastFrameTime = now;
 
-    resizeGL();
+    if (driver) {
+      const s = driver(dt);
+      if (s) applyState(s);
+    }
 
-    // --- BACKGROUND ---
-    gl.useProgram(progBg);
-    const bgQuadBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bgQuadBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
-    const posLocBg = gl.getAttribLocation(progBg, 'a_pos');
-    gl.enableVertexAttribArray(posLocBg);
-    gl.vertexAttribPointer(posLocBg, 2, gl.FLOAT, false, 0, 0);
+    time += dt * timeScale;
+    tuneQuality(dt);
+    resize();
 
-    gl.uniform2f(gl.getUniformLocation(progBg, 'u_res'), canvas.width, canvas.height);
-    gl.uniform1f(gl.getUniformLocation(progBg, 'u_time'), time);
-    gl.uniform1f(gl.getUniformLocation(progBg, 'u_audio'), state.audio);
-    gl.uniform2f(gl.getUniformLocation(progBg, 'u_tilt'), state.tiltX, state.tiltY);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    drawBackground();
+    drawFlower(dt);
+  }
 
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  /* ========== MATH (column-major) ========== */
 
-    // --- DODECAEDRO (TEMPORALMENTE DESACTIVADO PARA ENFOQUE EN FLOR) ---
-    // gl.useProgram(progDodeca);
+  function identity() {
+    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  }
 
-    // matrizes
-    const aspect = canvas.width / canvas.height;
-    const proj = perspective(45, aspect, 0.1, 100);
-    const view = lookAt([0,0,3.5], [0,0,0], [0,1,0]);
-    // const model = identity();
-    // // rotação via giroscópio
-    // rotateY(model, state.tiltX * Math.PI);
-    // rotateX(model, state.tiltY * Math.PI);
-    // // rotação autônoma
-    // rotateZ(model, time * 0.3 + state.audio * 1.5);
-    // // escala com áudio
-    // const scale = 1.0 + state.audio * 0.3;
-    // m4mult(model, [scale,0,0,0, 0,scale,0,0, 0,0,scale,0, 0,0,0,1]);
+  function perspective(fov, aspect, near, far) {
+    const f = 1 / Math.tan((fov * Math.PI) / 360);
+    const nf = 1 / (near - far);
+    return [
+      f / aspect, 0, 0, 0,
+      0, f, 0, 0,
+      0, 0, (far + near) * nf, -1,
+      0, 0, 2 * far * near * nf, 0,
+    ];
+  }
 
-    // const normalMat = transpose(inverse(model));
+  // Convenção OpenGL: o que está à frente da câmara tem z negativo.
+  function lookAt(e, center, up) {
+    const f = normalize3([center[0] - e[0], center[1] - e[1], center[2] - e[2]]);
+    const s = normalize3(cross3(f, up));
+    const u = cross3(s, f);
+    return [
+      s[0], u[0], -f[0], 0,
+      s[1], u[1], -f[1], 0,
+      s[2], u[2], -f[2], 0,
+      -dot3(s, e), -dot3(u, e), dot3(f, e), 1,
+    ];
+  }
 
-    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_proj'), false, proj);
-    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_view'), false, view);
-    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_model'), false, model);
-    // gl.uniformMatrix4fv(gl.getUniformLocation(progDodeca, 'u_normalMat'), false, normalMat);
+  function cross3(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
 
-    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_time'), time);
-    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_audio'), state.audio);
-    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_bass'), state.bass);
-    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_mid'), state.mid);
-    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_treble'), state.treble);
-    // gl.uniform1f(gl.getUniformLocation(progDodeca, 'u_pulse'), state.pulse);
-    // gl.uniform1i(gl.getUniformLocation(progDodeca, 'u_wireframe'), wireframe ? 1 : 0);
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
-    // // bind VAO e draw
-    // const ext = gl.getExtension('OES_vertex_array_object');
-    // if (ext && vao) ext.bindVertexArrayOES(vao);
+  function normalize3(v) {
+    const len = Math.sqrt(dot3(v, v)) || 1;
+    return [v[0] / len, v[1] / len, v[2] / len];
+  }
 
-    // gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, vaoIndices);
-    // gl.drawElements(gl.TRIANGLES, dodeca.count, gl.UNSIGNED_SHORT, 0);
+  function mat4Translate(x, y, z) {
+    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
+  }
 
-    // --- FLOR ---
-    if (progFlower && flower) {
-      gl.useProgram(progFlower);
+  function mat4RotateX(ang) {
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1];
+  }
 
-      // modelo da flor: só com áudio, SEM giroscópio
-      const modelFlower = identity();
-      // rotação lenta + aceleração com áudio
-      flowerRotation += dt * (0.2 + state.audio * 0.8);
-      rotateY(modelFlower, flowerRotation);
-      // escala com áudio
-      const scaleFlower = 0.9 + state.audio * 0.5;
-      m4mult(modelFlower, [scaleFlower,0,0,0, 0,scaleFlower,0,0, 0,0,scaleFlower,0, 0,0,0,1]);
+  function mat4RotateY(ang) {
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    return [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1];
+  }
 
-      gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_proj'), false, proj);
-      gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_view'), false, view);
-      gl.uniformMatrix4fv(gl.getUniformLocation(progFlower, 'u_model'), false, modelFlower);
+  function mat4RotateZ(ang) {
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  }
 
-      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_time'), time);
-      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_audio'), state.audio);
-      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_bass'), state.bass);
-      gl.uniform1f(gl.getUniformLocation(progFlower, 'u_treble'), state.treble);
+  function mat4Scale(x, y, z) {
+    return [x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1];
+  }
 
-      // bind e draw
-      if (flowerVerts) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, flowerVerts);
-        const posLocFlower = gl.getAttribLocation(progFlower, 'a_pos');
-        gl.enableVertexAttribArray(posLocFlower);
-        gl.vertexAttribPointer(posLocFlower, 3, gl.FLOAT, false, 0, 0);
+  // GLSL ES 1.00 não constrói mat3 a partir de mat4: a extracção é feita aqui.
+  // A escala é uniforme, por isso basta a parte de rotação.
+  function mat3FromMat4(m) {
+    return [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]];
+  }
+
+  function multiplyMatrices(a, b) {
+    const out = new Array(16);
+    for (let c = 0; c < 4; c++) {
+      for (let r = 0; r < 4; r++) {
+        out[c * 4 + r] =
+          a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
       }
+    }
+    return out;
+  }
 
-      if (flowerColors) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, flowerColors);
-        const colorLocFlower = gl.getAttribLocation(progFlower, 'a_color');
-        gl.enableVertexAttribArray(colorLocFlower);
-        gl.vertexAttribPointer(colorLocFlower, 3, gl.FLOAT, false, 0, 0);
-      }
+  /* ========== ENTRADA DE DADOS ========== */
 
-      gl.drawArrays(gl.POINTS, 0, flower.count);
+  function applyState(obj) {
+    state.audio = Math.max(0, obj.audio || 0);
+    state.bass = Math.max(0, obj.bass || 0);
+    state.mid = Math.max(0, obj.mid || 0);
+    state.treble = Math.max(0, obj.treble || 0);
+    state.pulse = Math.max(0, obj.pulse || 0);
+    if (obj.tilt) {
+      state.tiltX = obj.tilt[0] || 0;
+      state.tiltY = obj.tilt[1] || 0;
     }
   }
 
-  // ========== MATH ==========
-  function identity() { return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]; }
-  function perspective(fov, aspect, near, far) {
-    const f = 1 / Math.tan(fov * Math.PI / 360);
-    const nf = 1 / (near - far);
-    return [f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0];
-  }
-  function lookAt(eye, center, up) {
-    const f = [center[0]-eye[0], center[1]-eye[1], center[2]-eye[2]];
-    let flen = Math.sqrt(f[0]*f[0]+f[1]*f[1]+f[2]*f[2]);
-    f[0]/=flen; f[1]/=flen; f[2]/=flen;
-    const s = [up[1]*f[2]-up[2]*f[1], up[2]*f[0]-up[0]*f[2], up[0]*f[1]-up[1]*f[0]];
-    let slen = Math.sqrt(s[0]*s[0]+s[1]*s[1]+s[2]*s[2]);
-    s[0]/=slen; s[1]/=slen; s[2]/=slen;
-    const u = [f[1]*s[2]-f[2]*s[1], f[2]*s[0]-f[0]*s[2], f[0]*s[1]-f[1]*s[0]];
-    return [s[0],-u[0],f[0],0, s[1],-u[1],f[1],0, s[2],-u[2],f[2],0, -dot(s,eye),-dot(u,eye),-dot(f,eye),1];
-  }
-  function dot(a,b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
-  function rotateX(m, ang) { const c=Math.cos(ang), s=Math.sin(ang); const t=[1,0,0,0, 0,c,-s,0, 0,s,c,0, 0,0,0,1]; m4mult(m, t); }
-  function rotateY(m, ang) { const c=Math.cos(ang), s=Math.sin(ang); const t=[c,0,s,0, 0,1,0,0, -s,0,c,0, 0,0,0,1]; m4mult(m, t); }
-  function rotateZ(m, ang) { const c=Math.cos(ang), s=Math.sin(ang); const t=[c,-s,0,0, s,c,0,0, 0,0,1,0, 0,0,0,1]; m4mult(m, t); }
-  function m4mult(a, b) { for(let i=0;i<16;i++)a[i]=b[i%4]*a[Math.floor(i/4)*4] + b[(i%4)+4]*a[Math.floor(i/4)*4+1] + b[(i%4)+8]*a[Math.floor(i/4)*4+2] + b[(i%4)+12]*a[Math.floor(i/4)*4+3]; }
-  function inverse(m) { /* simplificado */ return m; }
-  function transpose(m) { return [m[0],m[4],m[8],m[12], m[1],m[5],m[9],m[13], m[2],m[6],m[10],m[14], m[3],m[7],m[11],m[15]]; }
-
-  // ========== API PÚBLICA ==========
+  /* readFrame(dt) devolve o estado dos sensores de cada frame. */
   window.v1su4rtShaders = {
-    init: function(canvasId) {
+    init: function (canvasId, readFrame) {
       canvas = document.getElementById(canvasId || 'stage');
-      if (initGL()) {
-        frame(performance.now());
-      } else {
-        rendererMode = '2d';
+      driver = typeof readFrame === 'function' ? readFrame : null;
+      if (!initGL()) {
+        rendererMode = 'none';
+        return false;
       }
+      lastFrameTime = performance.now();
+      frame(lastFrameTime);
+      return true;
     },
-    setAudio: function(obj) {
-      if (!obj) return;
-      state.audio = Math.max(0, obj.audio || 0);
-      state.bass = Math.max(0, obj.bass || 0);
-      state.mid = Math.max(0, obj.mid || 0);
-      state.treble = Math.max(0, obj.treble || 0);
-      state.pulse = Math.max(0, obj.pulse || 0);
-      if (obj.tilt) {
-        state.tiltX = obj.tilt[0] || 0;
-        state.tiltY = obj.tilt[1] || 0;
-      }
-      wireframe = state.audio > 0.8; // wireframe quando som alto
-    },
-    stop: function() {
+    setTimeScale: function (k) { timeScale = clamp(k, 0.05, 4); },
+    // ganho da nuvem de pontos: 0 apaga, 1 é o valor desenhado, 2 duplica o brilho
+    setCloudIntensity: function (v) { state.cloud = clamp(Number(v) || 0, 0, 2); },
+    cloudIntensity: function () { return state.cloud; },
+    stop: function () {
       if (raf) cancelAnimationFrame(raf);
+      raf = 0;
     },
-    renderer: function() { return rendererMode; }
+    renderer: function () { return rendererMode; }
   };
 })();
