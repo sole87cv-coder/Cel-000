@@ -1,0 +1,9 @@
+# ficheiros de trabalho: ficam no repositório, não vão para o site publicado
+.vs/
+.vercel/
+scripts/
+*.slnx
+*.md
+.gitattributes
+.gitignore
+.vercelignore

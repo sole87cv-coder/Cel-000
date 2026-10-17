@@ -141,7 +141,7 @@
   }
 
   if (!window.v1su4rtShaders) {
-    console.error('[v1su4rt] shaders.js não carregado');
+    console.error('[v1su4rt] shaders indisponíveis: shaders.glsl.js / shaders.js');
     document.documentElement.classList.add('no-webgl');
     setStatus('[v1su4rt] Erro: shaders indisponíveis.', 'warn');
     return;

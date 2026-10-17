@@ -3,14 +3,17 @@
     <File Path=".gitattributes" />
     <File Path=".gitignore" />
     <File Path=".nojekyll" />
+    <File Path=".vercelignore" />
     <File Path="icon.svg" />
     <File Path="index.html" />
     <File Path="manifest.webmanifest" />
     <File Path="privacy.html" />
     <File Path="service-worker.js" />
+    <File Path="vercel.json" />
     <Folder Name="/Site/assets/">
       <File Path="assets/app.js" />
       <File Path="assets/interaction.js" />
+      <File Path="assets/shaders.glsl.js" />
       <File Path="assets/shaders.js" />
       <File Path="assets/styles.css" />
     </Folder>
@@ -24,6 +27,7 @@
     </Folder>
   </Folder>
   <Folder Name="/Documentação/">
+    <File Path="CHANGELOG.md" />
     <File Path="README.md" />
     <File Path="TESTES.md" />
   </Folder>

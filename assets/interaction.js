@@ -108,7 +108,11 @@
         const src = ctx.createMediaStreamSource(stream);
         const an = ctx.createAnalyser();
         an.fftSize = 1024;
-        an.smoothingTimeConstant = 0.4;
+        // 0,15: com 0,4 o analyzer atrasa ~80 ms, o suficiente para borrar os agudos
+        an.smoothingTimeConstant = 0.15;
+        // fixados: os valores por omissão variam entre navegadores e alteram a escala
+        an.minDecibels = -100;
+        an.maxDecibels = -30;
         src.connect(an); // sem ligar na saída: não há retorno de áudio
         this.ctx = ctx;
         this.stream = stream;
@@ -147,13 +151,16 @@
       this.tgt.y = clamp((ay - this.base.y) / 40, -1, 1);
     }
 
-    _band(lo, hi, hz) {
+    /* Média linear dos bins de uma banda. Como o espectro da música cai ~9 dB por
+       oitava, a banda dos agudos (2-9 kHz) fica ~12 dB abaixo do nível dos 2 kHz:
+       sem gate/span próprios por banda, os agudos nunca chegam ao topo da escala. */
+    _band(lo, hi, hz, gate, span) {
       const a = Math.max(1, Math.floor(lo / hz));
       const b = Math.min(this.freq.length - 1, Math.ceil(hi / hz));
       let s = 0;
       for (let i = a; i <= b; i++) s += this.freq[i];
       const avg = s / ((b - a + 1) * 255);
-      return clamp((avg - 0.10) / 0.5, 0, 1);
+      return clamp((avg - gate) / span, 0, 1);
     }
 
     update(dt) {
@@ -169,18 +176,19 @@
         }
         L = clamp(Math.sqrt(s / this.wave.length) * 5, 0, 1);
         const hz = this.ctx.sampleRate / an.fftSize;
-        B = this._band(20, 250, hz);
-        M = this._band(250, 2000, hz);
-        T = this._band(2000, 9000, hz);
+        B = this._band(20, 250, hz, 0.08, 0.55);
+        M = this._band(250, 2000, hz, 0.06, 0.32);
+        T = this._band(2000, 9000, hz, 0.045, 0.22);
       }
-      const ease = (cur, target) => cur + (target - cur) * (1 - Math.exp(-dt * (target > cur ? 28 : 4)));
+      // release a 7 (tau ~140 ms): a 4 a nuvem de pontos não cintila com os agudos
+      const ease = (cur, target) => cur + (target - cur) * (1 - Math.exp(-dt * (target > cur ? 28 : 7)));
       this.sm.level = ease(this.sm.level, L);
       this.sm.bass = ease(this.sm.bass, B);
       this.sm.mid = ease(this.sm.mid, M);
       this.sm.treble = ease(this.sm.treble, T);
 
-      // batida: os graves saltam acima da média recente
-      this.bassAvg += (B - this.bassAvg) * (1 - Math.exp(-dt * 1.2));
+      // batida: os graves saltam acima da média recente (tau 333 ms, não 833 ms)
+      this.bassAvg += (B - this.bassAvg) * (1 - Math.exp(-dt * 3.0));
       if (B - this.bassAvg > 0.16 && this.pulse < 0.35) this.pulse = 1;
       this.pulse *= Math.exp(-dt * 4.5);
 
@@ -189,16 +197,18 @@
       this.tilt.y += (this.tgt.y - this.tilt.y) * k;
     }
 
-    /* Valores prontos para o shader, já com a sensibilidade aplicada. */
+    /* Valores prontos para o shader, já com a sensibilidade aplicada.
+       Tudo limitado a 0..1: os coeficientes dos shaders foram desenhados para
+       esse intervalo, e 1,6 fazia a corola abrir 32% do comprimento da pétala. */
     read() {
       const g = this.audioSens;
-      const c = (v) => clamp(v * g, 0, 1.6);
+      const c = (v) => clamp(v * g, 0, 1);
       return {
         level: c(this.sm.level),
         bass: c(this.sm.bass),
         mid: c(this.sm.mid),
         treble: c(this.sm.treble),
-        pulse: clamp(this.pulse * g, 0, 1.5),
+        pulse: clamp(this.pulse * g, 0, 1),
         tiltX: clamp(this.tilt.x * this.orientSens, -2, 2),
         tiltY: clamp(this.tilt.y * this.orientSens, -2, 2),
       };

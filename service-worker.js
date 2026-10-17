@@ -1,6 +1,6 @@
 // service-worker.js — cache offline do v1su4rt.
 // Ao alterar qualquer arquivo em APP_FILES, aumente CACHE_NAME.
-const CACHE_NAME = 'v1su4rt-v10';
+const CACHE_NAME = 'v1su4rt-v13';
 const APP_FILES = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const APP_FILES = [
   './manifest.webmanifest',
   './icon.svg',
   './assets/styles.css',
+  './assets/shaders.glsl.js',
   './assets/shaders.js',
   './assets/interaction.js',
   './assets/app.js',
